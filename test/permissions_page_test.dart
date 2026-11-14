@@ -93,7 +93,7 @@ void main() {
     await tester.tap(_row('自启动'));
     await tester.pumpAndSettle();
     expect(find.textContaining('为当前用户添加 ykt_helper 启动项'), findsOneWidget);
-    expect(find.textContaining('仅授权不会启动自动化'), findsOneWidget);
+    expect(find.textContaining('已保存的开启设置在重新授权后恢复'), findsOneWidget);
     expect(permissions.requested, isEmpty);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
