@@ -278,6 +278,7 @@ const defaultAiPrompt = '请使用最简洁的回答完成这道题：{question}
 const defaultSlidePrompt = '可以参考课程课件进行完成';
 const defaultFixedSingleAnswer = 'A';
 const defaultFixedMultipleAnswer = 'AB';
+const defaultFixedJudgmentAnswer = 'A';
 const defaultFixedSubjectiveAnswer = '不会';
 
 class AppSettings {
@@ -287,7 +288,10 @@ class AppSettings {
   bool autoStartService, appAutoStart, autoEnter, autoAnswer, autoSubmit;
   int autoSubmitDelaySeconds;
   AnswerMode answerMode;
-  String fixedSingleAnswer, fixedMultipleAnswer, fixedSubjectiveAnswer;
+  String fixedSingleAnswer,
+      fixedMultipleAnswer,
+      fixedJudgmentAnswer,
+      fixedSubjectiveAnswer;
   String baseUrl, apiKey, model, customPrompt, slidePrompt;
   SlideScope slideScope;
   AppSettings({
@@ -301,6 +305,7 @@ class AppSettings {
     String fixedAnswer = '',
     String? fixedSingleAnswer,
     String? fixedMultipleAnswer,
+    this.fixedJudgmentAnswer = defaultFixedJudgmentAnswer,
     String? fixedSubjectiveAnswer,
     this.baseUrl = '',
     this.apiKey = '',
@@ -328,12 +333,14 @@ class AppSettings {
   // settings are persisted separately and never fall back between categories.
   String get fixedAnswer => fixedSingleAnswer;
   set fixedAnswer(String value) {
-    fixedSingleAnswer = fixedMultipleAnswer = fixedSubjectiveAnswer = value;
+    fixedSingleAnswer = fixedMultipleAnswer = fixedJudgmentAnswer =
+        fixedSubjectiveAnswer = value;
   }
 
   String? fixedAnswerFor(Question question) => switch (question.type) {
-    1 || 6 => fixedSingleAnswer,
+    1 => fixedSingleAnswer,
     2 || 3 => fixedMultipleAnswer,
+    6 => fixedJudgmentAnswer,
     4 || 5 => fixedSubjectiveAnswer,
     _ => null,
   };
@@ -341,6 +348,7 @@ class AppSettings {
   bool get hasCompleteFixedAnswers => [
     fixedSingleAnswer,
     fixedMultipleAnswer,
+    fixedJudgmentAnswer,
     fixedSubjectiveAnswer,
   ].every((answer) => answer.trim().isNotEmpty);
 
@@ -365,6 +373,9 @@ class AppSettings {
     fixedMultipleAnswer: json.containsKey('fixedMultipleAnswer')
         ? str(json['fixedMultipleAnswer'])
         : null,
+    fixedJudgmentAnswer: json.containsKey('fixedJudgmentAnswer')
+        ? str(json['fixedJudgmentAnswer'])
+        : defaultFixedJudgmentAnswer,
     fixedSubjectiveAnswer: json.containsKey('fixedSubjectiveAnswer')
         ? str(json['fixedSubjectiveAnswer'])
         : null,
@@ -390,6 +401,7 @@ class AppSettings {
     'answerMode': answerMode.name,
     'fixedSingleAnswer': fixedSingleAnswer,
     'fixedMultipleAnswer': fixedMultipleAnswer,
+    'fixedJudgmentAnswer': fixedJudgmentAnswer,
     'fixedSubjectiveAnswer': fixedSubjectiveAnswer,
     'baseUrl': baseUrl,
     'apiKey': apiKey,

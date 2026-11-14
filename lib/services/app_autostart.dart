@@ -77,8 +77,8 @@ class AppAutostart {
     }
   }
 
-  /// Windows reads the StartupApps override; unknown system formats stay
-  /// unverified instead of being treated as authorized.
+  /// Windows reads the StartupApps override. Unknown formats stay unverified
+  /// in the permissions page; only explicit denial blocks its startup switch.
   Future<String> permissionStatus() async {
     if (!supported) return 'unsupported';
     if (defaultTargetPlatform == TargetPlatform.android) {

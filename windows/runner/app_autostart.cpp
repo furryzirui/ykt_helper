@@ -61,25 +61,40 @@ std::wstring StartupCommand() {
   return L"\"" + std::wstring(path.data(), length) + L"\" --background-auto-start";
 }
 
-std::string StartupPermission() {
-  if (!ReadFlag(L"prepared")) return "denied";
+bool HasPreparedStartupCommand() {
+  if (!ReadFlag(L"prepared")) return false;
   const auto expected = StartupCommand();
-  if (expected.empty()) return "needsConfirmation";
   std::wstring command;
-  if (!ReadCommand(kRunKey, kValueName, &command) || command != expected) return "denied";
+  return !expected.empty() && ReadCommand(kRunKey, kValueName, &command) && command == expected;
+}
+
+std::string StartupPermission() {
   BYTE approval[32]{};
   DWORD bytes = sizeof(approval);
   const LSTATUS approved = RegGetValueW(HKEY_CURRENT_USER, kApprovalKey, kValueName,
       RRF_RT_REG_BINARY, nullptr, approval, &bytes);
-  if (approved == ERROR_FILE_NOT_FOUND || approved == ERROR_PATH_NOT_FOUND) return "granted";
+  if (approved == ERROR_FILE_NOT_FOUND || approved == ERROR_PATH_NOT_FOUND) {
+    return HasPreparedStartupCommand() ? "granted" : "needsConfirmation";
+  }
   if (approved != ERROR_SUCCESS || bytes < 12) return "needsConfirmation";
-  // StartupApproved is a Windows implementation detail. Unknown formats are
-  // deliberately shown as requiring system confirmation, never as authorized.
+  // Windows also stores the default enabled state as exactly twelve zero bytes.
+  // Electron recognizes this representation too. Other state-0 payloads and
+  // unknown lengths remain unverified; only explicit denial blocks startup.
+  // https://github.com/electron/electron/blob/v39.1.1/shell/browser/browser_win.cc#L223-L235
+  if (bytes == 12) {
+    bool default_enabled = true;
+    for (DWORD index = 0; index < bytes; ++index) {
+      if (approval[index] != 0) default_enabled = false;
+    }
+    if (default_enabled) return HasPreparedStartupCommand() ? "granted" : "needsConfirmation";
+  }
+  // StartupApproved is a Windows implementation detail. Preserve unknown status
+  // for the permissions page, but the user's policy only blocks explicit denial.
   const DWORD state = static_cast<DWORD>(approval[0]) |
       (static_cast<DWORD>(approval[1]) << 8) |
       (static_cast<DWORD>(approval[2]) << 16) |
       (static_cast<DWORD>(approval[3]) << 24);
-  if (state == 0x02 || state == 0x06) return "granted";
+  if (state == 0x02 || state == 0x06) return HasPreparedStartupCommand() ? "granted" : "needsConfirmation";
   if (state == 0x03 || state == 0x07) return "denied";
   return "needsConfirmation";
 }
@@ -98,7 +113,8 @@ bool ConfigureStartup(bool enabled, bool eligible) {
   // Stop first even when permission was revoked. In particular, logout must
   // clear eligibility without depending on the startup authorization state.
   if (!WriteFlag(L"eligible", false)) return false;
-  if (enabled && eligible && StartupPermission() != "granted") return false;
+  if (enabled && eligible &&
+      (!HasPreparedStartupCommand() || StartupPermission() == "denied")) return false;
   if (!WriteFlag(L"enabled", enabled)) return false;
   // Keep the registered item visible in StartupApps when the app switch is off.
   // The early main() guard checks these flags before creating any window/engine.
@@ -119,7 +135,7 @@ bool ArgumentBool(const flutter::MethodCall<flutter::EncodableValue>& call,
 
 bool ShouldRunBackgroundAutostart() {
   return ReadFlag(L"enabled") && ReadFlag(L"eligible") &&
-      StartupPermission() == "granted";
+      HasPreparedStartupCommand() && StartupPermission() != "denied";
 }
 
 void RefreshPreparedStartupCommand() {

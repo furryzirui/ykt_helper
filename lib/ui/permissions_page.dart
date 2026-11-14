@@ -28,14 +28,18 @@ String _statusText(AppPermission permission, PermissionStatus status) =>
         permission == AppPermission.battery ? '仍受优化' : '未允许',
       PermissionStatus.notRequired => '无需授权',
       PermissionStatus.unsupported => '暂不支持',
-      PermissionStatus.needsConfirmation => '需在系统设置中确认',
+      PermissionStatus.needsConfirmation =>
+        defaultTargetPlatform == TargetPlatform.windows &&
+                permission == AppPermission.autostart
+            ? '状态未知，可开启自启动'
+            : '需在系统设置中确认',
     };
 
 String _permissionExplanation(AppPermission permission, bool request) {
   if (permission == AppPermission.autostart) {
     return defaultTargetPlatform == TargetPlatform.windows
         ? request
-              ? '用于登录 Windows 后在后台启动自动化。\n\n确认后，应用会为当前用户添加 ykt_helper 启动项，无需管理员权限。若已被系统禁用，将打开“启动应用”，请找到 ykt_helper 并允许启动。\n\n开启自启动需在自动化中打开“应用自启动”并保存；已保存的开启设置在重新授权后恢复。'
+              ? '用于登录 Windows 后在后台启动自动化。\n\n确认后，应用会为当前用户添加 ykt_helper 启动项，无需管理员权限。若已被系统禁用，将打开“启动应用”，请找到 ykt_helper 并允许启动。\n\n开启自启动需在自动化中打开“应用自启动”；设置会自动保存，已保存的开启设置在重新授权后恢复。'
               : '用于登录 Windows 后在后台启动自动化。\n\n将打开系统“启动应用”，可管理 ykt_helper 的启动权限。应用内“应用自启动”开关另行决定是否在登录后运行。'
         : '用于开机后和系统允许的进程回收后恢复自动化。\n\n将尝试打开系统自启动管理，请找到 ykt_helper 并允许自启动、关联启动或后台启动；若打开的是应用详情，请进入“自启动”或“权限”设置。请同时允许通知并取消电池优化。\n\nAndroid 无法统一读取厂商的自启动授权状态，设置后返回应用即可；强行停止后无法自动恢复。';
   }

@@ -238,6 +238,8 @@ void main() {
         await _mount(tester, AutomationPage(controller: controller));
         await tester.pump(const Duration(milliseconds: 501));
         await tester.pumpAndSettle();
+        expect(find.text('保存设置'), findsNothing);
+        expect(find.text('保存中…'), findsNothing);
         const automationKeys = [
           'auto-start-service',
           'app-auto-start',
@@ -295,12 +297,21 @@ void main() {
         );
         expect(find.text('发送课件时追加在原提示词之后'), findsOneWidget);
         _checkCardWidths(tester, width);
-        await _reveal(tester, find.widgetWithText(FilledButton, '保存设置'));
-        expect(
-          tester.getSize(find.widgetWithText(FilledButton, '保存设置')).width,
-          closeTo(width, .1),
-        );
+        expect(find.text('保存设置'), findsNothing);
+        expect(find.text('保存中…'), findsNothing);
         expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        controller.settings = AppSettings(autoAnswer: true, autoSubmit: true);
+        await _mount(tester, AutomationPage(controller: controller));
+        await _reveal(tester, find.byKey(const ValueKey('fixedSingle-A')));
+        expect(find.byType(ChoiceChip), findsNWidgets(6));
+        expect(find.byType(FilterChip), findsNWidgets(4));
+        _checkCardWidths(tester, width);
+        await _capture(tester, 'settings-fixed-options-$suffix');
+        final subjective = find.byKey(const ValueKey('field-fixedSubjective'));
+        await _reveal(tester, subjective);
+        expect(find.text('每个空使用相同内容'), findsOneWidget);
+        await _capture(tester, 'settings-fixed-subjective-$suffix');
         await tester.pumpWidget(const SizedBox());
         controller.dispose();
       });

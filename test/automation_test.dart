@@ -254,9 +254,10 @@ void main() {
       await controller.processEvent(live, unlock());
       await Future<void>.delayed(Duration.zero);
       final dynamic expected = switch (type) {
-        1 || 6 => ['B'],
+        1 => ['B'],
+        6 => ['A'],
         2 || 3 => ['A', 'B'],
-        4 => ['第一空', '第二空'],
+        4 => ['第一空;第二空', '第一空;第二空'],
         _ => {'content': '第一空;第二空', 'pics': [], 'videos': []},
       };
       expect(live.draftAnswers['q'], expected);
@@ -264,6 +265,36 @@ void main() {
       expect(api.submissions, 0);
     });
   }
+
+  test(
+    'fixed fill-in repeats the complete text in every blank without splitting lines or punctuation',
+    () async {
+      const content = '同一段内容\n第二行；保留分号;和标点';
+      controller.settings = AppSettings(
+        autoAnswer: true,
+        fixedSubjectiveAnswer: content,
+      );
+      const question = Question(id: 'q', body: '三个空', type: 4, blankCount: 3);
+      api.decks['p'] = const Presentation(
+        id: 'p',
+        title: '固定填空',
+        slides: [Slide(id: 's1', index: 0, imageUrl: '', question: question)],
+      );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      await controller.processEvent(live, unlock());
+      await Future<void>.delayed(Duration.zero);
+      expect(live.draftAnswers['q'], [content, content, content]);
+      expect(api.submissions, 0);
+      await controller.submitAnswer(
+        live,
+        live.questions['q']!,
+        live.draftAnswers['q'],
+      );
+      expect(api.submittedAnswers.single, [content, content, content]);
+    },
+  );
 
   test('empty fixed category skips without borrowing another answer', () async {
     controller.settings = AppSettings(
@@ -286,11 +317,12 @@ void main() {
     'saving fixed automation requires every category to be filled',
     () async {
       controller.account = null;
-      for (final missing in ['single', 'multiple', 'subjective']) {
+      for (final missing in ['single', 'multiple', 'judgment', 'subjective']) {
         final settings = AppSettings(
           autoAnswer: true,
           fixedSingleAnswer: missing == 'single' ? ' ' : 'A',
           fixedMultipleAnswer: missing == 'multiple' ? '' : 'AB',
+          fixedJudgmentAnswer: missing == 'judgment' ? '' : 'A',
           fixedSubjectiveAnswer: missing == 'subjective' ? '\n' : '文字答案',
         );
         await expectLater(
@@ -299,7 +331,7 @@ void main() {
             isA<ApiFailure>().having(
               (error) => error.message,
               'message',
-              '请填写三类固定答案后保存',
+              '请完成固定答案设置',
             ),
           ),
         );

@@ -396,7 +396,8 @@ class AppController extends ChangeNotifier {
   Future<void> saveSettings([AppSettings? next]) {
     final input = next ?? settings;
     final snapshot = AppSettings.fromJson(input.toJson())
-      ..autoSubmitDelaySeconds = input.autoSubmitDelaySeconds;
+      ..autoSubmitDelaySeconds = input.autoSubmitDelaySeconds
+      ..customPrompt = input.customPrompt;
     final operation = _settingsOperations
         .catchError((Object _) {})
         .then((_) => _saveSettings(snapshot));
@@ -412,7 +413,8 @@ class AppController extends ChangeNotifier {
             input.autoSubmitDelaySeconds > 3600)) {
       throw const ApiFailure('提交延迟请输入 1–3600 秒');
     }
-    final candidate = AppSettings.fromJson(input.toJson());
+    final candidate = AppSettings.fromJson(input.toJson())
+      ..customPrompt = input.customPrompt;
     // Auto-start has no useful meaning without an automation trigger. This
     // normalization also lets users turn the last automation off cleanly.
     if (!candidate.autoEnter && !candidate.autoAnswer) {
@@ -426,7 +428,20 @@ class AppController extends ChangeNotifier {
     if (candidate.autoAnswer) {
       if (candidate.answerMode == AnswerMode.fixed &&
           !candidate.hasCompleteFixedAnswers) {
-        throw const ApiFailure('请填写三类固定答案后保存');
+        throw const ApiFailure('请完成固定答案设置');
+      }
+      if (candidate.answerMode == AnswerMode.fixed) {
+        if (!RegExp(r'^[A-D]$').hasMatch(candidate.fixedSingleAnswer)) {
+          throw const ApiFailure('请从 A–D 选择一个单选答案');
+        }
+        final multiple = candidate.fixedMultipleAnswer;
+        if (!RegExp(r'^[A-D]+$').hasMatch(multiple) ||
+            multiple.split('').toSet().length != multiple.length) {
+          throw const ApiFailure('请从 A–D 选择多选答案');
+        }
+        if (!const ['A', 'B'].contains(candidate.fixedJudgmentAnswer)) {
+          throw const ApiFailure('请选择正确或错误作为判断答案');
+        }
       }
       if (candidate.answerMode == AnswerMode.ai) {
         AiAnswerService.endpoint(candidate.baseUrl, 'chat/completions');
@@ -441,8 +456,17 @@ class AppController extends ChangeNotifier {
     if (!kIsWeb &&
         defaultTargetPlatform == TargetPlatform.windows &&
         candidate.appAutoStart &&
-        await autostart.permissionStatus() != 'granted') {
-      throw const ApiFailure('请先在应用权限中允许自启动');
+        !settings.appAutoStart) {
+      String? startupPermission;
+      try {
+        startupPermission = await autostart.permissionStatus();
+      } catch (_) {
+        // Unknown system formats/read failures do not imply explicit denial.
+        // Native configuration still checks the registered startup command.
+      }
+      if (startupPermission == 'denied') {
+        throw const ApiFailure('系统已禁用自启动，请在应用权限中允许');
+      }
     }
     final previous = settings;
     await _write('settings', jsonEncode(candidate.toJson()));
@@ -492,14 +516,31 @@ class AppController extends ChangeNotifier {
 
   Future<void> _configureAppAutostart(AppSettings value) {
     final enabled = value.appAutoStart;
+    final existingPreference = settings.appAutoStart && enabled;
     final eligible =
         (account != null || _resumeLoginPending) &&
         (value.autoEnter || value.autoAnswer) &&
         (!backgroundSupported || value.autoStartService) &&
         !_serviceManuallyDisabled;
-    final operation = _startupOperations
-        .catchError((Object _) {})
-        .then((_) => autostart.configure(enabled: enabled, eligible: eligible));
+    final operation = _startupOperations.catchError((Object _) {}).then((
+      _,
+    ) async {
+      var canRun = eligible;
+      // A revoked OS permission must not prevent unrelated edits or turning
+      // automation off. Keep the saved preference, with native work stopped.
+      // A newly enabled preference still reaches the native denial check.
+      if (existingPreference &&
+          eligible &&
+          !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.windows) {
+        try {
+          if (await autostart.permissionStatus() == 'denied') canRun = false;
+        } catch (_) {
+          // Unknown status is allowed by the selected Windows policy.
+        }
+      }
+      await autostart.configure(enabled: enabled, eligible: canRun);
+    });
     _startupOperations = operation.catchError((Object _) {});
     return operation;
   }
@@ -1300,7 +1341,10 @@ class AppController extends ChangeNotifier {
           live.autoStates[id] = '答案已修改，待确认提交';
           continue;
         }
-        final parsed = AiAnswerService.parse(result, question);
+        final parsed =
+            snapshot.answerMode == AnswerMode.fixed && question.type == 4
+            ? List<String>.filled(question.blankCount, result)
+            : AiAnswerService.parse(result, question);
         // An official client may have submitted while AI was running.
         final deck = live.presentations.values
             .where(

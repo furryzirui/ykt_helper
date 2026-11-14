@@ -13,6 +13,7 @@ import 'package:ykt_helper/ui/app.dart';
 import 'package:ykt_helper/ui/automation_page.dart';
 import 'package:ykt_helper/ui/course_pages.dart';
 import 'package:ykt_helper/ui/live_page.dart';
+import 'package:ykt_helper/ui/permissions_page.dart';
 import 'package:ykt_helper/ui/settings_page.dart';
 import 'package:ykt_helper/ui/widgets.dart';
 
@@ -535,65 +536,68 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('自动答题配置先编辑保存成功后才应用', (tester) async {
+  testWidgets('自动保存拒绝空固定答案并在输入完整后应用配置', (tester) async {
     final controller = _UiController()
-      ..settings = AppSettings(fixedSingleAnswer: '');
+      ..settings = AppSettings(autoAnswer: true, fixedSubjectiveAnswer: '旧内容');
     await tester.pumpWidget(
       MaterialApp(home: AutomationPage(controller: controller)),
     );
-    await tester.tap(find.text('自动答题'));
     await tester.pumpAndSettle();
     expect(find.text('固定内容'), findsOneWidget);
-    expect(controller.settings.autoAnswer, isFalse);
-    await tester.scrollUntilVisible(
-      find.widgetWithText(FilledButton, '保存设置'),
-      180,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-    expect(
-      find.widgetWithText(FilledButton, '保存设置').hitTestable(),
-      findsOneWidget,
-    );
-    await tester.tap(find.text('保存设置'));
-    await tester.pumpAndSettle();
-    expect(controller.settings.autoAnswer, isFalse);
-    expect(find.text('请填写三类固定答案后保存'), findsOneWidget);
-    expect(find.text('设置已保存'), findsNothing);
-    ScaffoldMessenger.of(
-      tester.element(find.byType(AutomationPage)),
-    ).hideCurrentSnackBar();
-    await tester.pumpAndSettle();
-    final answer = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField && widget.decoration?.labelText == '单选 / 判断答案',
-    );
+    expect(find.text('保存设置'), findsNothing);
+    final answer = find.byKey(const ValueKey('field-fixedSubjective'));
     await tester.scrollUntilVisible(
       answer,
-      -180,
+      180,
       scrollable: find.byType(Scrollable).first,
     );
     await tester.pumpAndSettle();
     expect(answer.hitTestable(), findsOneWidget);
-    await tester.enterText(answer, 'A');
-    tester.testTextInput.hide();
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.widgetWithText(FilledButton, '保存设置'),
-      180,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-    expect(
-      find.widgetWithText(FilledButton, '保存设置').hitTestable(),
-      findsOneWidget,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('保存设置'));
+    await tester.enterText(answer, '');
+    await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(controller.settings.autoAnswer, isTrue);
-    expect(controller.settings.fixedAnswer, 'A');
-    expect(find.text('设置已保存'), findsOneWidget);
+    expect(controller.settings.fixedSubjectiveAnswer, '旧内容');
+    expect(tester.widget<TextField>(answer).controller!.text, isEmpty);
+    expect(tester.takeException(), isNull);
+
+    await tester.enterText(answer, 'C');
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(controller.settings.fixedSubjectiveAnswer, '旧内容');
+    await tester.pump(const Duration(seconds: 1));
+    tester.testTextInput.hide();
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoAnswer, isTrue);
+    expect(controller.settings.fixedSubjectiveAnswer, 'C');
+    expect(controller.settings.fixedSingleAnswer, 'A');
+    expect(controller.settings.fixedMultipleAnswer, 'AB');
+    expect(find.text('保存设置'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('Android服务自动保存后仍可返回设置管理应用权限', (tester) async {
+    final controller = _UiController()..settings = AppSettings(autoEnter: true);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: SettingsPage(controller: controller)),
+      ),
+    );
+    await tester.tap(find.text('自动化'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(SwitchListTile, '自动启动服务'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoStartService, isTrue);
+    expect(find.text('保存设置'), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('应用权限'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PermissionsPage), findsOneWidget);
+    expect(find.text('通知'), findsOneWidget);
+    expect(find.text('电池优化'), findsOneWidget);
+    expect(find.text('需在系统设置中确认'), findsOneWidget);
+    expect(controller.settings.autoStartService, isTrue);
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });

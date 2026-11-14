@@ -181,25 +181,13 @@ void main() {
   });
 
   test(
-    'Windows refuses unverified permission before persistence or registration',
+    'Windows refuses only explicit denial before persistence or registration',
     () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       controller.dispose();
       controller = create(backgroundAvailable: false)..account = _Api.user;
       final previous = controller.settings;
-      for (final status in ['denied', 'needsConfirmation', 'unsupported']) {
-        autostart.permission = status;
-        await expectLater(
-          controller.saveSettings(
-            AppSettings(autoEnter: true, appAutoStart: true),
-          ),
-          throwsA(isA<ApiFailure>()),
-        );
-        expect(store.settingsWrites, isEmpty);
-        expect(autostart.registrations, isEmpty);
-        expect(identical(controller.settings, previous), true);
-      }
-      autostart.permissionError = const ApiFailure('无法读取自启动状态');
+      autostart.permission = 'denied';
       await expectLater(
         controller.saveSettings(
           AppSettings(autoEnter: true, appAutoStart: true),
@@ -208,6 +196,30 @@ void main() {
       );
       expect(store.settingsWrites, isEmpty);
       expect(autostart.registrations, isEmpty);
+      expect(identical(controller.settings, previous), true);
+    },
+  );
+
+  test(
+    'Windows permits unknown approval and read failures after native preparation',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      controller.dispose();
+      controller = create(backgroundAvailable: false)..account = _Api.user;
+      for (final status in ['needsConfirmation', 'unsupported']) {
+        autostart.permission = status;
+        await controller.saveSettings(
+          AppSettings(autoEnter: true, appAutoStart: true),
+        );
+        expect(controller.settings.appAutoStart, true);
+        expect(autostart.registrations.last, (enabled: true, eligible: true));
+      }
+      autostart.permissionError = const ApiFailure('无法读取自启动状态');
+      await controller.saveSettings(
+        AppSettings(autoEnter: true, appAutoStart: true),
+      );
+      expect(controller.settings.appAutoStart, true);
+      expect(autostart.registrations.last, (enabled: true, eligible: true));
     },
   );
 
@@ -225,6 +237,32 @@ void main() {
       expect(controller.settings.appAutoStart, false);
       expect(autostart.permissionChecks, 0);
       expect(autostart.registrations.last.enabled, false);
+    },
+  );
+
+  test(
+    'Windows revoked startup permission does not block stopping answer automation',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      controller.dispose();
+      controller = create(backgroundAvailable: false)..account = _Api.user;
+      controller.settings = AppSettings(
+        autoEnter: true,
+        autoAnswer: true,
+        appAutoStart: true,
+      );
+      autostart.permission = 'denied';
+      await controller.saveSettings(
+        AppSettings(autoEnter: true, autoAnswer: false, appAutoStart: true),
+      );
+      expect(controller.settings.autoAnswer, false);
+      expect(controller.settings.autoEnter, true);
+      expect(controller.settings.appAutoStart, true);
+      expect(autostart.registrations.last, (enabled: true, eligible: false));
+      expect(
+        object(jsonDecode(store.values['settings']!))['autoAnswer'],
+        false,
+      );
     },
   );
 
@@ -309,24 +347,83 @@ void main() {
     },
   );
 
+  test('fixed automation refuses any missing fixed answer category', () async {
+    for (final absent in ['single', 'multiple', 'judgment', 'subjective']) {
+      await expectLater(
+        controller.saveSettings(
+          AppSettings(
+            autoAnswer: true,
+            fixedSingleAnswer: absent == 'single' ? '' : 'A',
+            fixedMultipleAnswer: absent == 'multiple' ? ' ' : 'AB',
+            fixedJudgmentAnswer: absent == 'judgment' ? '' : 'A',
+            fixedSubjectiveAnswer: absent == 'subjective' ? '\n' : '不会',
+          ),
+        ),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(store.settingsWrites, isEmpty);
+      expect(autostart.registrations, isEmpty);
+    }
+  });
+
   test(
-    'fixed automation refuses missing single, multiple or subjective answers',
+    'AI automation refuses an edited blank prompt without restoring its default',
     () async {
-      for (final absent in ['single', 'multiple', 'subjective']) {
+      for (final prompt in ['', '  \n']) {
         await expectLater(
           controller.saveSettings(
             AppSettings(
               autoAnswer: true,
-              fixedSingleAnswer: absent == 'single' ? '' : 'A',
-              fixedMultipleAnswer: absent == 'multiple' ? ' ' : 'AB',
-              fixedSubjectiveAnswer: absent == 'subjective' ? '\n' : '不会',
+              answerMode: AnswerMode.ai,
+              baseUrl: 'https://offline.invalid/v1',
+              apiKey: 'offline-only',
+              model: 'test-model',
+              customPrompt: prompt,
             ),
           ),
+          throwsA(
+            isA<ApiFailure>().having(
+              (e) => e.message,
+              'message',
+              contains('提示词'),
+            ),
+          ),
+        );
+        expect(store.settingsWrites, isEmpty);
+        expect(autostart.registrations, isEmpty);
+        expect(controller.settings.autoAnswer, false);
+      }
+    },
+  );
+
+  test(
+    'fixed choice settings accept only independent A-D and judgment selections',
+    () async {
+      for (final invalid in [
+        AppSettings(autoAnswer: true, fixedSingleAnswer: 'AB'),
+        AppSettings(autoAnswer: true, fixedSingleAnswer: 'E'),
+        AppSettings(autoAnswer: true, fixedMultipleAnswer: 'AA'),
+        AppSettings(autoAnswer: true, fixedMultipleAnswer: 'AE'),
+        AppSettings(autoAnswer: true, fixedJudgmentAnswer: 'C'),
+      ]) {
+        await expectLater(
+          controller.saveSettings(invalid),
           throwsA(isA<ApiFailure>()),
         );
         expect(store.settingsWrites, isEmpty);
         expect(autostart.registrations, isEmpty);
       }
+      await controller.saveSettings(
+        AppSettings(
+          autoAnswer: true,
+          fixedSingleAnswer: 'D',
+          fixedMultipleAnswer: 'ACD',
+          fixedJudgmentAnswer: 'B',
+        ),
+      );
+      expect(controller.settings.fixedSingleAnswer, 'D');
+      expect(controller.settings.fixedMultipleAnswer, 'ACD');
+      expect(controller.settings.fixedJudgmentAnswer, 'B');
     },
   );
 

@@ -6,12 +6,14 @@ void main() {
     final fresh = AppSettings();
     expect(fresh.fixedSingleAnswer, 'A');
     expect(fresh.fixedMultipleAnswer, 'AB');
+    expect(fresh.fixedJudgmentAnswer, 'A');
     expect(fresh.fixedSubjectiveAnswer, '不会');
     expect(fresh.slidePrompt, defaultSlidePrompt);
     expect(fresh.appAutoStart, isFalse);
     final saved = AppSettings(
       fixedSingleAnswer: 'B',
       fixedMultipleAnswer: 'AC',
+      fixedJudgmentAnswer: 'B',
       fixedSubjectiveAnswer: '说明',
       slidePrompt: '参考附件的定义',
       appAutoStart: true,
@@ -19,6 +21,7 @@ void main() {
     final restored = AppSettings.fromJson(saved.toJson());
     expect(restored.fixedSingleAnswer, 'B');
     expect(restored.fixedMultipleAnswer, 'AC');
+    expect(restored.fixedJudgmentAnswer, 'B');
     expect(restored.fixedSubjectiveAnswer, '说明');
     expect(restored.slidePrompt, '参考附件的定义');
     expect(restored.appAutoStart, isTrue);
@@ -34,6 +37,7 @@ void main() {
       final settings = AppSettings.fromJson(json);
       expect(settings.fixedSingleAnswer, 'A');
       expect(settings.fixedMultipleAnswer, 'AB');
+      expect(settings.fixedJudgmentAnswer, 'A');
       expect(settings.fixedSubjectiveAnswer, '不会');
       expect(settings.hasCompleteFixedAnswers, true);
     }
@@ -44,12 +48,14 @@ void main() {
     expect(settings.fixedSingleAnswer, 'A');
     expect(settings.fixedMultipleAnswer, 'A');
     expect(settings.fixedSubjectiveAnswer, 'A');
+    expect(settings.fixedJudgmentAnswer, 'A');
     settings.fixedMultipleAnswer = 'BC';
     settings.fixedSubjectiveAnswer = '';
     final restored = AppSettings.fromJson(settings.toJson());
     expect(restored.fixedSingleAnswer, 'A');
     expect(restored.fixedMultipleAnswer, 'BC');
     expect(restored.fixedSubjectiveAnswer, isEmpty);
+    expect(restored.fixedJudgmentAnswer, 'A');
     expect(restored.fixedAnswer, 'A');
   });
 
@@ -58,11 +64,13 @@ void main() {
       'fixedAnswer': 'old',
       'fixedSingleAnswer': '',
       'fixedMultipleAnswer': 'AB',
+      'fixedJudgmentAnswer': '',
       'fixedSubjectiveAnswer': '',
       'slidePrompt': '',
     });
     expect(settings.fixedSingleAnswer, isEmpty);
     expect(settings.fixedMultipleAnswer, 'AB');
+    expect(settings.fixedJudgmentAnswer, isEmpty);
     expect(settings.fixedSubjectiveAnswer, isEmpty);
     expect(settings.slidePrompt, isEmpty);
     expect(AppSettings.fromJson(settings.toJson()).slidePrompt, isEmpty);
@@ -75,12 +83,22 @@ void main() {
       fixedMultipleAnswer: 'AC',
       fixedSubjectiveAnswer: '说明',
     );
-    for (final type in [1, 6]) {
+    for (final type in [1]) {
       expect(
         settings.fixedAnswerFor(Question(id: 'q', body: '', type: type)),
         'B',
       );
     }
+    expect(
+      settings.fixedAnswerFor(const Question(id: 'q', body: '', type: 6)),
+      'A',
+    );
+    settings.fixedJudgmentAnswer = 'B';
+    settings.fixedSingleAnswer = 'D';
+    expect(
+      settings.fixedAnswerFor(const Question(id: 'q', body: '', type: 6)),
+      'B',
+    );
     for (final type in [2, 3]) {
       expect(
         settings.fixedAnswerFor(Question(id: 'q', body: '', type: type)),
