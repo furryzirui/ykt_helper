@@ -1,6 +1,6 @@
 # 构建说明
 
-常规构建命令见根目录 README。当前版本 1.0.0+5，Android 包名 `com.furryzirui.ykt_helper`，最低 API 26，target/compile SDK 36。
+常规构建命令见根目录 README。当前版本 1.0.1+6，Android 包名 `com.furryzirui.ykt_helper`，最低 API 26，target/compile SDK 36。
 
 ## 发布签名
 
@@ -24,6 +24,15 @@ cd android
 ```
 
 正式构建输出为 `build/app/outputs/apk/release/app-release.apk`。发布前核对 `apksigner verify --verbose --print-certs` 的证书摘要及 `aapt dump badging` 的包名和版本。
+
+Release 分别提供 universal（三种 ABI）和 arm64-v8a 安装包。执行上述配置后，在 `android/` 目录分别构建并保存产物：
+
+```sh
+./gradlew :app:assembleRelease -PyktRequireReleaseSigning=true -Ptarget-platform=android-arm,android-arm64,android-x64 -Psplit-per-abi=false
+./gradlew :app:assembleRelease -PyktRequireReleaseSigning=true -Ptarget-platform=android-arm64 -Psplit-per-abi=true -Pforce-version-code-ignoring-abi=true
+```
+
+arm64 产物为 `build/app/outputs/apk/release/app-arm64-v8a-release.apk`。保留同一 `versionCode`，使两种 APK 的后续更新规则一致。`--config-only` 只更新本地配置，ABI 参数需传给实际构建的 Gradle 命令。
 
 本项目的发布私钥和密码只在本地保管，不提供给源码构建者。`.signing/`、`android/key.properties`、密钥库和密码不得加入 Git 或公开源码包。密钥持有人应分别备份私钥及其密码，后续正式更新使用同一证书；丢失后不能继续以原证书签名。
 
@@ -59,7 +68,7 @@ flutter build windows --release
 ./scripts/windows/package.ps1
 ```
 
-产物为 `dist/ykt_helper-1.0.0-windows-setup.exe`，包含 Flutter、原生插件、资源和 VC++ 运行库，每用户安装。脚本可用 `-InnoSetupCompiler` 指定现有 `ISCC.exe`。安装包未做 Authenticode 签名；登录安全验证需要 WebView2 Runtime。
+产物为 `dist/ykt_helper-1.0.1-windows-setup.exe`，包含 Flutter、原生插件、资源和 VC++ 运行库，每用户安装。脚本可用 `-InnoSetupCompiler` 指定现有 `ISCC.exe`。安装包未做 Authenticode 签名；登录安全验证需要 WebView2 Runtime。
 
 ## iOS 未签名 IPA
 
@@ -71,7 +80,7 @@ flutter build ios --release --no-codesign
 bash scripts/ios/package_unsigned.sh
 ```
 
-产物为 `dist/ykt_helper-1.0.0-ios-unsigned.ipa`。脚本验证真实设备 arm64、Bundle ID、版本、主应用未签名、无描述文件以及 ZIP 完整性。框架可能保留工具链签名，安装前需自行对完整应用签名；此流程不需要提供 Apple 账号或签名私钥。
+产物为 `dist/ykt_helper-1.0.1-ios-unsigned.ipa`。脚本验证真实设备 arm64、Bundle ID、版本、主应用未签名、无描述文件以及 ZIP 完整性。框架可能保留工具链签名，安装前需自行对完整应用签名；此流程不需要提供 Apple 账号或签名私钥。
 
 仓库的 Windows / iOS 工作流使用对应系统构建并保存产物，不自动发布 Release。
 
