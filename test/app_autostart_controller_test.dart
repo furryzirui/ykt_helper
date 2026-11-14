@@ -76,6 +76,7 @@ class _Background extends BackgroundRuntime {
   final bool available;
   final requests = <bool>[];
   bool active = false;
+  bool fail = false;
 
   _Background({this.available = true});
 
@@ -91,6 +92,7 @@ class _Background extends BackgroundRuntime {
   @override
   Future<bool> setEnabled(bool enabled) async {
     requests.add(enabled);
+    if (fail && enabled) throw const ApiFailure('测试：后台服务启动失败');
     active = enabled;
     return true;
   }
@@ -172,6 +174,26 @@ void main() {
         appAutoStart: true,
       ).toJson(),
     );
+  }
+
+  Future<void> expectSavedAndReloaded(AppSettings expected) async {
+    expect(controller.settings.toJson(), expected.toJson());
+    expect(object(jsonDecode(store.values['settings']!)), expected.toJson());
+    final restored = AppController(
+      store: store,
+      autostart: autostart,
+      background: background,
+      api: api,
+      logs: _Logs(),
+      startTimers: false,
+      connectSockets: false,
+    );
+    try {
+      await restored.initialize();
+      expect(restored.settings.toJson(), expected.toJson());
+    } finally {
+      restored.dispose();
+    }
   }
 
   setUp(() => controller = create());
@@ -347,57 +369,55 @@ void main() {
     },
   );
 
-  test('fixed automation refuses any missing fixed answer category', () async {
-    for (final absent in ['single', 'multiple', 'judgment', 'subjective']) {
-      await expectLater(
-        controller.saveSettings(
-          AppSettings(
-            autoAnswer: true,
-            fixedSingleAnswer: absent == 'single' ? '' : 'A',
-            fixedMultipleAnswer: absent == 'multiple' ? ' ' : 'AB',
-            fixedJudgmentAnswer: absent == 'judgment' ? '' : 'A',
-            fixedSubjectiveAnswer: absent == 'subjective' ? '\n' : '不会',
-          ),
-        ),
-        throwsA(isA<ApiFailure>()),
-      );
-      expect(store.settingsWrites, isEmpty);
-      expect(autostart.registrations, isEmpty);
-    }
-  });
-
   test(
-    'AI automation refuses an edited blank prompt without restoring its default',
+    'fixed automation saves and reloads missing fixed answer categories',
     () async {
-      for (final prompt in ['', '  \n']) {
-        await expectLater(
-          controller.saveSettings(
-            AppSettings(
-              autoAnswer: true,
-              answerMode: AnswerMode.ai,
-              baseUrl: 'https://offline.invalid/v1',
-              apiKey: 'offline-only',
-              model: 'test-model',
-              customPrompt: prompt,
-            ),
-          ),
-          throwsA(
-            isA<ApiFailure>().having(
-              (e) => e.message,
-              'message',
-              contains('提示词'),
-            ),
-          ),
+      for (final absent in ['single', 'multiple', 'judgment', 'subjective']) {
+        final requested = AppSettings(
+          autoAnswer: true,
+          fixedSingleAnswer: absent == 'single' ? '' : 'A',
+          fixedMultipleAnswer: absent == 'multiple' ? ' ' : 'AB',
+          fixedJudgmentAnswer: absent == 'judgment' ? '' : 'A',
+          fixedSubjectiveAnswer: absent == 'subjective' ? '\n' : '不会',
         );
-        expect(store.settingsWrites, isEmpty);
-        expect(autostart.registrations, isEmpty);
-        expect(controller.settings.autoAnswer, false);
+        await controller.saveSettings(requested);
+        await expectSavedAndReloaded(requested);
       }
     },
   );
 
   test(
-    'fixed choice settings accept only independent A-D and judgment selections',
+    'AI automation saves and reloads empty connection fields and prompts',
+    () async {
+      for (final absent in ['baseUrl', 'apiKey', 'model', 'prompt', 'all']) {
+        final requested = AppSettings(
+          autoAnswer: true,
+          answerMode: AnswerMode.ai,
+          baseUrl: ['baseUrl', 'all'].contains(absent)
+              ? ''
+              : 'https://offline.invalid/v1',
+          apiKey: ['apiKey', 'all'].contains(absent) ? '' : 'offline-only',
+          model: ['model', 'all'].contains(absent) ? '' : 'test-model',
+          customPrompt: ['prompt', 'all'].contains(absent)
+              ? ''
+              : defaultAiPrompt,
+        );
+        await controller.saveSettings(requested);
+        await expectSavedAndReloaded(requested);
+      }
+      final whitespacePrompt = AppSettings(
+        autoAnswer: true,
+        answerMode: AnswerMode.ai,
+        baseUrl: 'not an endpoint',
+        customPrompt: '  \n',
+      );
+      await controller.saveSettings(whitespacePrompt);
+      await expectSavedAndReloaded(whitespacePrompt);
+    },
+  );
+
+  test(
+    'fixed choice settings persist invalid selections without changing them',
     () async {
       for (final invalid in [
         AppSettings(autoAnswer: true, fixedSingleAnswer: 'AB'),
@@ -406,12 +426,8 @@ void main() {
         AppSettings(autoAnswer: true, fixedMultipleAnswer: 'AE'),
         AppSettings(autoAnswer: true, fixedJudgmentAnswer: 'C'),
       ]) {
-        await expectLater(
-          controller.saveSettings(invalid),
-          throwsA(isA<ApiFailure>()),
-        );
-        expect(store.settingsWrites, isEmpty);
-        expect(autostart.registrations, isEmpty);
+        await controller.saveSettings(invalid);
+        await expectSavedAndReloaded(invalid);
       }
       await controller.saveSettings(
         AppSettings(
@@ -428,31 +444,56 @@ void main() {
   );
 
   test(
-    'OS registration failure rolls back memory and durable settings',
+    'submission delays outside validation bounds remain durable after restart',
+    () async {
+      for (final delay in [-1, 0, 3601]) {
+        final requested = AppSettings(
+          autoAnswer: true,
+          autoSubmit: true,
+          autoSubmitDelaySeconds: delay,
+        );
+        await controller.saveSettings(requested);
+        await expectSavedAndReloaded(requested);
+      }
+    },
+  );
+
+  test(
+    'OS registration failure preserves saved settings and reports independently',
     () async {
       final previous = AppSettings(autoEnter: true, fixedSingleAnswer: 'B');
       controller.settings = previous;
       store.values['settings'] = jsonEncode(previous.toJson());
       controller.account = _Api.user;
       autostart.failuresRemaining = 1;
-      await expectLater(
-        controller.saveSettings(
-          AppSettings(
-            autoAnswer: true,
-            autoStartService: true,
-            appAutoStart: true,
-          ),
-        ),
-        throwsA(isA<ApiFailure>()),
+      final requested = AppSettings(
+        autoAnswer: true,
+        autoStartService: true,
+        appAutoStart: true,
       );
-      expect(identical(controller.settings, previous), true);
-      expect(object(jsonDecode(store.values['settings']!)), previous.toJson());
-      expect(store.settingsWrites.length, 2);
-      expect(autostart.registrations, [
-        (enabled: true, eligible: true),
-        (enabled: false, eligible: false),
-      ]);
-      expect(background.active, false);
+      await controller.saveSettings(requested);
+      expect(controller.settings.toJson(), requested.toJson());
+      expect(object(jsonDecode(store.values['settings']!)), requested.toJson());
+      expect(store.settingsWrites.length, 1);
+      expect(autostart.registrations, [(enabled: true, eligible: true)]);
+      expect(background.active, true);
+      expect(controller.backgroundWarning, contains('应用自启动设置失败'));
+      await controller.retryBackground();
+      expect(controller.backgroundWarning, isNull);
+      expect(autostart.savedRegistration, (enabled: true, eligible: true));
+    },
+  );
+
+  test(
+    'background runtime failure cannot reject a durable setting save',
+    () async {
+      controller.account = _Api.user;
+      background.fail = true;
+      final requested = AppSettings(autoEnter: true, autoStartService: true);
+      await controller.saveSettings(requested);
+      expect(controller.settings.toJson(), requested.toJson());
+      expect(object(jsonDecode(store.values['settings']!)), requested.toJson());
+      expect(controller.backgroundWarning, contains('后台运行未开启'));
     },
   );
 
@@ -489,7 +530,7 @@ void main() {
   );
 
   test(
-    'concurrent failed save restores the preceding committed transaction',
+    'concurrent saves keep the latest durable settings when OS registration fails',
     () async {
       controller.account = _Api.user;
       final firstStarted = Completer<void>();
@@ -522,7 +563,6 @@ void main() {
           fixedSingleAnswer: 'C',
         ),
       );
-      final secondFailure = expectLater(secondSave, throwsA(isA<ApiFailure>()));
       await Future<void>.delayed(Duration.zero);
       expect(
         store.settingsWrites.length,
@@ -531,14 +571,17 @@ void main() {
       );
       releaseFirst.complete();
       await firstSave;
-      await secondFailure;
-      expect(controller.settings.toJson(), firstSettings.toJson());
+      await secondSave;
+      expect(controller.settings.fixedSingleAnswer, 'C');
+      expect(controller.settings.appAutoStart, false);
       expect(
         object(jsonDecode(store.values['settings']!)),
-        firstSettings.toJson(),
+        controller.settings.toJson(),
       );
+      expect(store.settingsWrites.length, 2);
       expect(autostart.savedRegistration, (enabled: true, eligible: true));
       expect(background.active, true);
+      expect(controller.backgroundWarning, contains('应用自启动设置失败'));
 
       final lastSettings = AppSettings(fixedSingleAnswer: 'D');
       await controller.saveSettings(lastSettings);

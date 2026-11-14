@@ -395,9 +395,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> saveSettings([AppSettings? next]) {
     final input = next ?? settings;
-    final snapshot = AppSettings.fromJson(input.toJson())
-      ..autoSubmitDelaySeconds = input.autoSubmitDelaySeconds
-      ..customPrompt = input.customPrompt;
+    final snapshot = AppSettings.fromJson(input.toJson());
     final operation = _settingsOperations
         .catchError((Object _) {})
         .then((_) => _saveSettings(snapshot));
@@ -407,14 +405,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> _saveSettings(AppSettings input) async {
     if (_disposed) return;
-    if (input.autoAnswer &&
-        input.autoSubmit &&
-        (input.autoSubmitDelaySeconds < 1 ||
-            input.autoSubmitDelaySeconds > 3600)) {
-      throw const ApiFailure('提交延迟请输入 1–3600 秒');
-    }
-    final candidate = AppSettings.fromJson(input.toJson())
-      ..customPrompt = input.customPrompt;
+    final candidate = AppSettings.fromJson(input.toJson());
     // Auto-start has no useful meaning without an automation trigger. This
     // normalization also lets users turn the last automation off cleanly.
     if (!candidate.autoEnter && !candidate.autoAnswer) {
@@ -424,34 +415,6 @@ class AppController extends ChangeNotifier {
     if (!autostart.supported ||
         backgroundSupported && !candidate.autoStartService) {
       candidate.appAutoStart = false;
-    }
-    if (candidate.autoAnswer) {
-      if (candidate.answerMode == AnswerMode.fixed &&
-          !candidate.hasCompleteFixedAnswers) {
-        throw const ApiFailure('请完成固定答案设置');
-      }
-      if (candidate.answerMode == AnswerMode.fixed) {
-        if (!RegExp(r'^[A-D]$').hasMatch(candidate.fixedSingleAnswer)) {
-          throw const ApiFailure('请从 A–D 选择一个单选答案');
-        }
-        final multiple = candidate.fixedMultipleAnswer;
-        if (!RegExp(r'^[A-D]+$').hasMatch(multiple) ||
-            multiple.split('').toSet().length != multiple.length) {
-          throw const ApiFailure('请从 A–D 选择多选答案');
-        }
-        if (!const ['A', 'B'].contains(candidate.fixedJudgmentAnswer)) {
-          throw const ApiFailure('请选择正确或错误作为判断答案');
-        }
-      }
-      if (candidate.answerMode == AnswerMode.ai) {
-        AiAnswerService.endpoint(candidate.baseUrl, 'chat/completions');
-        if (candidate.model.trim().isEmpty) {
-          throw const ApiFailure('请先获取并选择 AI 模型');
-        }
-        if (candidate.customPrompt.trim().isEmpty) {
-          throw const ApiFailure('请填写 AI 提示词');
-        }
-      }
     }
     if (!kIsWeb &&
         defaultTargetPlatform == TargetPlatform.windows &&
@@ -468,20 +431,7 @@ class AppController extends ChangeNotifier {
         throw const ApiFailure('系统已禁用自启动，请在应用权限中允许');
       }
     }
-    final previous = settings;
     await _write('settings', jsonEncode(candidate.toJson()));
-    try {
-      await _configureAppAutostart(candidate);
-    } catch (_) {
-      // A failed OS registration must not leave the UI claiming it is saved.
-      await _write('settings', jsonEncode(previous.toJson()));
-      try {
-        await _configureAppAutostart(previous);
-      } catch (_) {
-        logs.add(AppLogEvent.background, success: false);
-      }
-      rethrow;
-    }
     if (_disposed) return;
     settings = candidate;
     logs.add(AppLogEvent.settings, success: true);
@@ -565,7 +515,14 @@ class AppController extends ChangeNotifier {
         hasAutomation &&
         !_serviceManuallyDisabled &&
         (_serviceManuallyEnabled || autoRequested);
-    final okay = await background.setEnabled(needed);
+    var okay = false;
+    try {
+      okay = await background.setEnabled(needed);
+    } catch (_) {
+      // Settings are already durable; a platform service failure is reported
+      // independently and must not turn a successful local save into a failure.
+      logs.add(AppLogEvent.background, success: false);
+    }
     if (_disposed || revision != _backgroundRevision) return;
     final previousWarning = backgroundWarning;
     backgroundWarning =

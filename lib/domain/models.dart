@@ -393,13 +393,7 @@ class AppSettings {
     autoEnter: truth(json['autoEnter']),
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
-    autoSubmitDelaySeconds: switch (integer(
-      json['autoSubmitDelaySeconds'],
-      30,
-    )) {
-      final seconds when seconds >= 1 && seconds <= 3600 => seconds,
-      _ => 30,
-    },
+    autoSubmitDelaySeconds: integer(json['autoSubmitDelaySeconds'], 30),
     answerMode: json['answerMode'] == 'ai' ? AnswerMode.ai : AnswerMode.fixed,
     fixedAnswer: str(json['fixedAnswer']),
     fixedSingleAnswer: json.containsKey('fixedSingleAnswer')
@@ -417,7 +411,9 @@ class AppSettings {
     baseUrl: str(json['baseUrl']),
     apiKey: str(json['apiKey']),
     model: str(json['model']),
-    customPrompt: firstText([json['customPrompt'], defaultAiPrompt]),
+    customPrompt: json.containsKey('customPrompt')
+        ? str(json['customPrompt'])
+        : defaultAiPrompt,
     slidePrompt: json.containsKey('slidePrompt')
         ? str(json['slidePrompt'])
         : defaultSlidePrompt,

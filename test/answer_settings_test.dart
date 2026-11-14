@@ -77,6 +77,35 @@ void main() {
     expect(AppSettings.fromJson({}).slidePrompt, defaultSlidePrompt);
   });
 
+  test('explicit blank AI configuration survives serialization', () {
+    for (final prompt in ['', '  \n']) {
+      final settings = AppSettings(
+        answerMode: AnswerMode.ai,
+        baseUrl: '',
+        apiKey: '',
+        model: '',
+        customPrompt: prompt,
+      );
+      final restored = AppSettings.fromJson(settings.toJson());
+      expect(restored.baseUrl, isEmpty);
+      expect(restored.apiKey, isEmpty);
+      expect(restored.model, isEmpty);
+      expect(restored.customPrompt, prompt);
+    }
+    expect(AppSettings.fromJson({}).customPrompt, defaultAiPrompt);
+  });
+
+  test('explicit invalid submission delays survive serialization', () {
+    for (final delay in [-1, 0, 3601]) {
+      final settings = AppSettings(autoSubmitDelaySeconds: delay);
+      expect(
+        AppSettings.fromJson(settings.toJson()).autoSubmitDelaySeconds,
+        delay,
+      );
+    }
+    expect(AppSettings.fromJson({}).autoSubmitDelaySeconds, 30);
+  });
+
   test('fixed answers select by protocol question category', () {
     final settings = AppSettings(
       fixedSingleAnswer: 'B',

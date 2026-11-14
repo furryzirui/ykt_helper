@@ -536,7 +536,7 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('自动保存拒绝空固定答案并在输入完整后应用配置', (tester) async {
+  testWidgets('空固定答案也自动保存，校验原因不阻碍后续修改', (tester) async {
     final controller = _UiController()
       ..settings = AppSettings(autoAnswer: true, fixedSubjectiveAnswer: '旧内容');
     await tester.pumpWidget(
@@ -557,13 +557,13 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(controller.settings.autoAnswer, isTrue);
-    expect(controller.settings.fixedSubjectiveAnswer, '旧内容');
+    expect(controller.settings.fixedSubjectiveAnswer, isEmpty);
     expect(tester.widget<TextField>(answer).controller!.text, isEmpty);
     expect(tester.takeException(), isNull);
 
     await tester.enterText(answer, 'C');
     await tester.pump(const Duration(milliseconds: 200));
-    expect(controller.settings.fixedSubjectiveAnswer, '旧内容');
+    expect(controller.settings.fixedSubjectiveAnswer, isEmpty);
     await tester.pump(const Duration(seconds: 1));
     tester.testTextInput.hide();
     await tester.pumpAndSettle();

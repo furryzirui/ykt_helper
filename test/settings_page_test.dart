@@ -222,7 +222,7 @@ void main() {
     await tester.tap(find.text('自定义 AI'));
     await tester.pump(const Duration(milliseconds: 1));
     expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
-    expect(controller.settings.answerMode, AnswerMode.fixed);
+    expect(controller.settings.answerMode, AnswerMode.ai);
     await tester.pump(const Duration(milliseconds: 600));
     expect(ai.requests, hasLength(1));
     expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
@@ -230,7 +230,7 @@ void main() {
     expect(find.text('正在获取模型…'), findsNothing);
     await tester.pump(const Duration(seconds: 2));
     expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
-    expect(controller.settings.answerMode, AnswerMode.fixed);
+    expect(controller.settings.answerMode, AnswerMode.ai);
     ai.requests.single.response.complete(['model-a', 'model-b']);
     await tester.pumpAndSettle();
     expect(controller.settings.model, 'model-a');
@@ -646,7 +646,7 @@ void main() {
     await _close(tester, controller);
   });
 
-  testWidgets('无效旧选项不默认选中，清空多选不覆盖旧生效配置', (tester) async {
+  testWidgets('无效旧选项不默认选中，清空多选仍自动保存并提示原因', (tester) async {
     final controller = _Controller(_Ai())
       ..settings = AppSettings(
         autoAnswer: true,
@@ -667,33 +667,31 @@ void main() {
     await _reveal(tester, _setting('fixedSingle-B'));
     await tester.tap(_setting('fixedSingle-B'));
     await tester.pump();
-    expect(controller.saves, 0);
+    expect(controller.saves, 1);
     await tester.tap(_setting('fixedMultiple-C'));
     await tester.pumpAndSettle();
     expect(controller.settings.fixedSingleAnswer, 'B');
     expect(controller.settings.fixedMultipleAnswer, 'C');
     await tester.tap(_setting('fixedMultiple-C'));
     await tester.pumpAndSettle();
-    expect(controller.settings.fixedMultipleAnswer, 'C');
+    expect(controller.settings.fixedMultipleAnswer, isEmpty);
     expect(
       tester.widget<FilterChip>(_setting('fixedMultiple-C')).selected,
       isFalse,
     );
-    expect(find.textContaining('未保存'), findsOneWidget);
+    expect(find.textContaining('请选择 A–D 范围内的单选和多选答案'), findsOneWidget);
     await _close(tester, controller);
   });
 
-  testWidgets('无效输入不覆盖，关闭自动提交和答题仍立即生效', (tester) async {
+  testWidgets('无效输入也自动保存，关闭自动提交和答题仍立即生效', (tester) async {
     final controller = _Controller(_Ai())
       ..settings = AppSettings(autoAnswer: true, autoSubmit: true);
     await _show(tester, controller);
     await _type(tester, 'fixedSubjective', '');
     await _settleSave(tester);
-    expect(controller.saves, 0);
-    expect(
-      controller.settings.fixedSubjectiveAnswer,
-      defaultFixedSubjectiveAnswer,
-    );
+    expect(controller.saves, 1);
+    expect(controller.settings.fixedSubjectiveAnswer, isEmpty);
+    expect(find.textContaining('请填写全部固定答案'), findsOneWidget);
     await _reveal(tester, _setting('auto-submit'));
     await tester.tap(_setting('auto-submit'));
     await tester.pumpAndSettle();
@@ -715,13 +713,14 @@ void main() {
     await _close(tester, controller);
   });
 
-  testWidgets('延迟非法时保留旧值，修正后自动保存', (tester) async {
+  testWidgets('延迟非法仍保存并提示原因，修正后清除提示', (tester) async {
     final controller = _Controller(_Ai())
       ..settings = AppSettings(autoAnswer: true, autoSubmit: true);
     await _show(tester, controller);
     await _type(tester, 'submitDelay', '0');
     await _settleSave(tester);
-    expect(controller.saves, 0);
+    expect(controller.saves, 1);
+    expect(controller.settings.autoSubmitDelaySeconds, 0);
     expect(find.textContaining('提交延迟请输入'), findsOneWidget);
     await _type(tester, 'submitDelay', '45');
     await _settleSave(tester);
@@ -808,7 +807,7 @@ void main() {
     await _close(tester, controller);
   });
 
-  testWidgets('AI切换未配齐保持旧方案，模型默认选择与提示词自动保存', (tester) async {
+  testWidgets('AI未配齐也保存，模型自动选择和空提示词均持久化', (tester) async {
     final ai = _Ai();
     final controller = _Controller(ai)
       ..settings = AppSettings(autoAnswer: true);
@@ -816,8 +815,8 @@ void main() {
     await _reveal(tester, find.text('自定义 AI'));
     await tester.tap(find.text('自定义 AI'));
     await tester.pump();
-    expect(controller.settings.answerMode, AnswerMode.fixed);
-    expect(find.textContaining('未保存：请填写有效的 AI base_url'), findsOneWidget);
+    expect(controller.settings.answerMode, AnswerMode.ai);
+    expect(find.textContaining('请填写有效的 AI base_url'), findsOneWidget);
     expect(
       find.descendant(
         of: find.byType(AppBar),
@@ -836,7 +835,7 @@ void main() {
     expect(controller.settings.model, 'vision-a');
     await _type(tester, 'prompt', '');
     await _settleSave(tester);
-    expect(controller.settings.customPrompt, defaultAiPrompt);
+    expect(controller.settings.customPrompt, isEmpty);
     expect(find.textContaining('请填写 AI 提示词'), findsOneWidget);
     await _type(tester, 'prompt', '只输出：{question}');
     await _settleSave(tester);
@@ -887,7 +886,9 @@ void main() {
       ),
       findsNothing,
     );
-    expect(controller.saves, 0);
+    expect(controller.saves, greaterThan(0));
+    expect(controller.settings.baseUrl, 'https://new.example.com/v1');
+    expect(controller.settings.model, isEmpty);
     await _close(tester, controller);
   });
 
@@ -958,7 +959,7 @@ void main() {
     await _type(tester, 'apiKey', 'key');
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
-    expect(controller.settings.answerMode, AnswerMode.fixed);
+    expect(controller.settings.answerMode, AnswerMode.ai);
     expect(draft.settings!.baseUrl, 'https://ai.example.com/v1');
     await tester.pumpWidget(
       MaterialApp(

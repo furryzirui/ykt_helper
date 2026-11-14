@@ -354,7 +354,7 @@ void main() {
   });
 
   test(
-    'saving fixed automation requires every category to be filled',
+    'saving fixed automation retains missing answer categories',
     () async {
       controller.account = null;
       for (final missing in ['single', 'multiple', 'judgment', 'subjective']) {
@@ -365,17 +365,8 @@ void main() {
           fixedJudgmentAnswer: missing == 'judgment' ? '' : 'A',
           fixedSubjectiveAnswer: missing == 'subjective' ? '\n' : '文字答案',
         );
-        await expectLater(
-          controller.saveSettings(settings),
-          throwsA(
-            isA<ApiFailure>().having(
-              (error) => error.message,
-              'message',
-              '请完成固定答案设置',
-            ),
-          ),
-        );
-        expect(controller.settings.autoAnswer, false);
+        await controller.saveSettings(settings);
+        expect(controller.settings.toJson(), settings.toJson());
       }
       await controller.saveSettings(
         AppSettings(
@@ -736,14 +727,14 @@ void main() {
       expect(live.answers.containsKey('q'), false);
     },
   );
-  test('missing or invalid stored delay defaults to thirty seconds', () {
+  test('missing stored delay defaults while explicit values are retained', () {
     expect(AppSettings().autoSubmitDelaySeconds, 30);
     expect(AppSettings.fromJson({}).autoSubmitDelaySeconds, 30);
     expect(
       AppSettings.fromJson({
         'autoSubmitDelaySeconds': 0,
       }).autoSubmitDelaySeconds,
-      30,
+      0,
     );
     final restored = AppSettings.fromJson(
       AppSettings(autoSubmitDelaySeconds: 47).toJson(),
@@ -751,20 +742,20 @@ void main() {
     expect(restored.autoSubmitDelaySeconds, 47);
   });
 
-  test('saving an invalid automatic submission delay is rejected', () async {
-    await expectLater(
-      controller.saveSettings(
+  test(
+    'saving an invalid automatic submission delay retains its value',
+    () async {
+      await controller.saveSettings(
         AppSettings(
           autoAnswer: true,
           autoSubmit: true,
           fixedAnswer: 'A',
           autoSubmitDelaySeconds: 0,
         ),
-      ),
-      throwsA(isA<ApiFailure>()),
-    );
-    expect(controller.settings.autoSubmitDelaySeconds, 30);
-  });
+      );
+      expect(controller.settings.autoSubmitDelaySeconds, 0);
+    },
+  );
 
   Future<LiveClass> prepareDelayed(
     WidgetTester tester, {

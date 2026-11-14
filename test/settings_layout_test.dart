@@ -333,7 +333,7 @@ void main() {
         _checkStatusGeometry(tester, size, appBar, firstSetting);
         pending.complete();
         await tester.pumpAndSettle();
-        expect(tester.widget<Text>(status).data, '未保存：$error');
+        expect(tester.widget<Text>(status).data, '保存失败：$error');
         final errorSemantics = find.byKey(
           const ValueKey('automation-save-error'),
         );
@@ -341,7 +341,7 @@ void main() {
           find.descendant(of: find.byType(AppBar), matching: errorSemantics),
           findsOneWidget,
         );
-        expect(find.byTooltip('未保存：$error，点击重试'), findsOneWidget);
+        expect(find.byTooltip('保存失败：$error，点击重试'), findsOneWidget);
         _checkStatusGeometry(tester, size, appBar, firstSetting);
         await _capture(
           tester,
@@ -391,9 +391,12 @@ void main() {
         ai.requests.single.completeError(const ApiFailure(error));
         await tester.pumpAndSettle();
         final status = find.byKey(const ValueKey('automation-status'));
-        expect(tester.widget<Text>(status).data, '未保存：$error');
-        expect(find.byTooltip('未保存：$error，点击重试'), findsOneWidget);
-        expect(find.text(error), findsNothing);
+        expect(tester.widget<Text>(status).data, error);
+        expect(find.byTooltip('$error，点击重试'), findsOneWidget);
+        expect(
+          find.descendant(of: find.byType(AppBar), matching: find.text(error)),
+          findsOneWidget,
+        );
         _checkStatusGeometry(tester, size, appBar, firstSetting);
         await _capture(
           tester,

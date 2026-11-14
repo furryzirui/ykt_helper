@@ -39,10 +39,10 @@ class _AutomationPageState extends State<AutomationPage>
   bool _dirty = false, _saveAgain = false, _leaving = false, _canPop = false;
   bool _closing = false;
   int _editRevision = 0;
-  final _controlRevisions = <String, int>{};
-  String? _saveError;
+  String? _saveError, _configurationError;
   int _modelGeneration = 0;
   bool _loadingModels = false, _hasSaved = false;
+  bool _selectModelWhenLoaded = false;
   static const _modelRequiredError = '请获取并选择当前 AI 服务的模型';
   List<String> _models = [];
   String? _modelsError, _loadedBaseUrl, _loadedApiKey;
@@ -149,6 +149,7 @@ class _AutomationPageState extends State<AutomationPage>
       entry.value.text = values[entry.key] ?? '';
     }
     if (!_modelsReady) _scheduleModels();
+    _configurationError = _configurationIssue(_draft!);
   }
 
   static AppSettings _copy(AppSettings value) =>
@@ -159,17 +160,19 @@ class _AutomationPageState extends State<AutomationPage>
   static bool _sameSettings(AppSettings first, AppSettings second) =>
       jsonEncode(first.toJson()) == jsonEncode(second.toJson());
 
-  void _edit(VoidCallback change, {String? control, bool text = false}) {
+  void _edit(VoidCallback change, {bool text = false}) {
     setState(change);
-    _queueSave(control: control, text: text);
+    _queueSave(text: text);
   }
 
-  void _queueSave({String? control, bool text = false}) {
+  void _queueSave({bool text = false}) {
     _editRevision++;
     _dirty = true;
-    if (control != null) _controlRevisions[control] = _editRevision;
     _saveDebounce?.cancel();
-    setState(() => _saveError = null);
+    setState(() {
+      _saveError = null;
+      _configurationError = null;
+    });
     if (text) {
       _saveDebounce = Timer(const Duration(milliseconds: 600), _flushSaves);
     } else {
@@ -206,23 +209,11 @@ class _AutomationPageState extends State<AutomationPage>
     return null;
   }
 
-  AppSettings _safetyChanges(AppSettings requested) {
-    final candidate = _copy(widget.controller.settings);
-    for (final control in _controlRevisions.keys) {
-      switch (control) {
-        case 'autoEnter':
-          candidate.autoEnter = requested.autoEnter;
-        case 'autoAnswer':
-          if (!requested.autoAnswer) candidate.autoAnswer = false;
-        case 'autoSubmit':
-          if (!requested.autoSubmit) candidate.autoSubmit = false;
-        case 'autoStartService':
-          if (!requested.autoStartService) candidate.autoStartService = false;
-        case 'appAutoStart':
-          if (!requested.appAutoStart) candidate.appAutoStart = false;
-      }
-    }
-    return candidate;
+  String? _configurationIssue(AppSettings value) {
+    final validation = _validationError(value);
+    return validation == _modelRequiredError && _waitingForModels
+        ? null
+        : validation;
   }
 
   void _cacheDraft() {
@@ -257,28 +248,15 @@ class _AutomationPageState extends State<AutomationPage>
       if (!_dirty || _draft == null || !widget.controller.initialized) break;
       final revision = _editRevision;
       attemptedRevision = revision;
-      final requested = _copy(_draft!);
-      final validation = _validationError(requested);
-      final candidate = validation == null
-          ? requested
-          : _safetyChanges(requested);
-      if (mounted && !_closing) {
-        setState(() {
-          _saveError = validation == _modelRequiredError && _waitingForModels
-              ? null
-              : validation;
-        });
-      }
+      final candidate = _copy(_draft!);
       if (_sameSettings(candidate, widget.controller.settings)) {
-        if (_sameSettings(requested, widget.controller.settings)) {
-          _dirty = false;
-          _controlRevisions.clear();
-          if (mounted && !_closing) {
-            setState(() {
-              _saveError = null;
-              _hasSaved = true;
-            });
-          }
+        _dirty = false;
+        if (mounted && !_closing) {
+          setState(() {
+            _saveError = null;
+            _configurationError = _configurationIssue(candidate);
+            _hasSaved = true;
+          });
         }
         _source = widget.controller.settings;
         _cacheDraft();
@@ -296,8 +274,7 @@ class _AutomationPageState extends State<AutomationPage>
       try {
         await widget.controller.saveSettings(candidate);
         _source = widget.controller.settings;
-        _controlRevisions.removeWhere((_, changedAt) => changedAt <= revision);
-        if (revision == _editRevision && validation == null) {
+        if (revision == _editRevision) {
           final committed = widget.controller.settings;
           _draft!
             ..autoEnter = committed.autoEnter
@@ -306,7 +283,11 @@ class _AutomationPageState extends State<AutomationPage>
             ..autoStartService = committed.autoStartService
             ..appAutoStart = committed.appAutoStart;
           _dirty = !_sameSettings(_draft!, committed);
-          if (!_dirty) _hasSaved = true;
+          if (!_dirty) {
+            _hasSaved = true;
+            _saveError = null;
+            _configurationError = _configurationIssue(_draft!);
+          }
         }
         _cacheDraft();
       } catch (error) {
@@ -335,13 +316,15 @@ class _AutomationPageState extends State<AutomationPage>
     _modelDebounce?.cancel();
     final generation = ++_modelGeneration;
     _loadingModels = false;
-    if (_saveError == _modelsError || _saveError == _modelRequiredError) {
-      _saveError = null;
-    }
+    _configurationError = null;
     _modelsError = null;
     _models = [];
     _loadedBaseUrl = _loadedApiKey = null;
     final draft = _draft!;
+    _selectModelWhenLoaded =
+        clearSelection ||
+        _dirty ||
+        !_sameSettings(draft, widget.controller.settings);
     if (clearSelection) draft.model = '';
     if (!widget.controller.initialized ||
         !draft.autoAnswer ||
@@ -385,16 +368,25 @@ class _AutomationPageState extends State<AutomationPage>
       );
       if (!_currentModelRequest(generation, baseUrl, apiKey)) return;
       if (models.isEmpty) throw const ApiFailure('AI 没有返回可选择的模型');
+      var selectionChanged = false;
       setState(() {
         _models = models;
         _loadedBaseUrl = baseUrl;
         _loadedApiKey = apiKey;
         _loadingModels = false;
-        if (_dirty && !models.contains(_draft!.model)) {
+        if ((_selectModelWhenLoaded || _draft!.model.isEmpty) &&
+            !models.contains(_draft!.model)) {
           _draft!.model = models.first;
+          selectionChanged = true;
         }
+        _selectModelWhenLoaded = false;
+        _configurationError = _configurationIssue(_draft!);
       });
-      if (_dirty && _saveDebounce?.isActive != true) unawaited(_flushSaves());
+      if (selectionChanged) {
+        _queueSave();
+      } else if (_dirty && _saveDebounce?.isActive != true) {
+        unawaited(_flushSaves());
+      }
     } catch (failure) {
       widget.controller.logs.add(
         AppLogEvent.automatic,
@@ -423,7 +415,7 @@ class _AutomationPageState extends State<AutomationPage>
         _draft?.answerMode == AnswerMode.ai &&
         !_modelsReady) {
       setState(() {
-        _saveError = null;
+        _configurationError = null;
         _scheduleModels(immediate: true);
       });
     }
@@ -431,13 +423,12 @@ class _AutomationPageState extends State<AutomationPage>
   }
 
   Widget _saveStatus(BuildContext context) {
-    final error = _saveError ?? _modelsError;
+    final configurationError = _configurationError ?? _modelsError;
+    final error = _saveError ?? configurationError;
     final canRetry = error != null && (_dirty || _modelsError != null);
-    final text = error != null
-        ? '未保存：$error'
-        : _hasSaved
-        ? '已自动保存'
-        : '';
+    final text = _saveError != null
+        ? '保存失败：$_saveError'
+        : configurationError ?? (_hasSaved ? '已自动保存' : '');
     return SizedBox(
       width: (MediaQuery.sizeOf(context).width * .46).clamp(0, 480),
       child: Padding(
@@ -475,7 +466,7 @@ class _AutomationPageState extends State<AutomationPage>
 
   Future<void> _setAppAutoStart(bool enabled) async {
     if (!enabled) {
-      _edit(() => _draft!.appAutoStart = false, control: 'appAutoStart');
+      _edit(() => _draft!.appAutoStart = false);
       return;
     }
     final windows = _windows;
@@ -513,7 +504,7 @@ class _AutomationPageState extends State<AutomationPage>
       }
       if (windows && !await _confirmAutostartPermission()) return;
       if (!mounted) return;
-      _edit(() => _draft!.appAutoStart = true, control: 'appAutoStart');
+      _edit(() => _draft!.appAutoStart = true);
     }
   }
 
@@ -717,7 +708,7 @@ class _AutomationPageState extends State<AutomationPage>
                               : (value) => _edit(() {
                                   settings.autoStartService = value;
                                   if (!value) settings.appAutoStart = false;
-                                }, control: 'autoStartService'),
+                                }),
                         )
                       else
                         ListTile(
@@ -786,7 +777,7 @@ class _AutomationPageState extends State<AutomationPage>
                                     settings.autoStartService = false;
                                     settings.appAutoStart = false;
                                   }
-                                }, control: 'autoEnter');
+                                });
                               },
                       ),
                       const Divider(height: 1),
@@ -808,7 +799,7 @@ class _AutomationPageState extends State<AutomationPage>
                                     settings.appAutoStart = false;
                                   }
                                   _scheduleModels();
-                                }, control: 'autoAnswer');
+                                });
                               },
                       ),
                       if (c.backgroundWarning != null)
@@ -847,10 +838,8 @@ class _AutomationPageState extends State<AutomationPage>
                           value: settings.autoSubmit,
                           onChanged: _disabled
                               ? null
-                              : (value) => _edit(
-                                  () => settings.autoSubmit = value,
-                                  control: 'autoSubmit',
-                                ),
+                              : (value) =>
+                                    _edit(() => settings.autoSubmit = value),
                         ),
                         if (settings.autoSubmit)
                           Padding(
