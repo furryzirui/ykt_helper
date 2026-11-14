@@ -8,6 +8,7 @@ build/
 dist/
 android/local.properties
 android/key.properties
+android/.kotlin/
 *.jks
 *.keystore
 *.log

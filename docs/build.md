@@ -51,7 +51,7 @@ Windows 首次运行插件需要符号链接权限，可开启开发者模式；
 
 ## Windows EXE 安装包
 
-需要 Windows、Visual Studio C++ 桌面工具和 Inno Setup 6。在不含中文的项目路径执行：
+需要 Windows、Visual Studio C++ 桌面工具、Python 3 和 Inno Setup 6。在不含中文的项目路径执行：
 
 ```powershell
 flutter pub get
@@ -74,3 +74,5 @@ bash scripts/ios/package_unsigned.sh
 产物为 `dist/ykt_helper-1.0.0-ios-unsigned.ipa`。脚本验证真实设备 arm64、Bundle ID、版本、主应用未签名、无描述文件以及 ZIP 完整性。框架可能保留工具链签名，安装前需自行对完整应用签名；此流程不需要提供 Apple 账号或签名私钥。
 
 仓库的 Windows / iOS 工作流使用对应系统构建并保存产物，不自动发布 Release。
+
+运行完整性清单由打包脚本生成；官方 Windows / iOS 构建从 CI Secret 读取独立 Ed25519 密钥（需要 Python cryptography）。无签名密钥的自行构建版本仍可运行，但启动时会提示无法验证为官方发布。私钥不得加入源码。
