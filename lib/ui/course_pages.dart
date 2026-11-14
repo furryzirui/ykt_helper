@@ -667,16 +667,6 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
                           : null,
                       icon: const Icon(Icons.chevron_right),
                     ),
-                    if (slide != null && slide.imageUrl.isNotEmpty)
-                      IconButton(
-                        tooltip: defaultTargetPlatform == TargetPlatform.windows
-                            ? '保存图片'
-                            : '保存到系统相册',
-                        onPressed: _downloading
-                            ? null
-                            : () => _download(detail, 'image', slide: slide),
-                        icon: const Icon(Icons.save_alt_rounded),
-                      ),
                   ],
                 ),
                 if (information.isNotEmpty)
@@ -704,137 +694,190 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
   }
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<domain.LessonDetail>(
-    future: _detail,
-    builder: (context, snapshot) {
-      final detail = snapshot.data;
-      final available =
-          snapshot.connectionState == ConnectionState.done &&
-          !snapshot.hasError &&
-          detail != null &&
-          !detail.lesson.oldVersion;
-      final hasImages =
-          available &&
-          detail.reviewSlides.any((slide) => slide.imageUrl.isNotEmpty);
-      return Scaffold(
-        appBar: fullTitleAppBar(
-          context,
-          title: widget.lesson.title,
-          automaticallyImplyLeading: !widget.embedded,
-          actions: [
-            if (_downloading)
-              const SizedBox(
-                width: 48,
-                child: Center(
-                  child: SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
-              )
-            else
-              PopupMenuButton<String>(
-                tooltip: '下载课件',
-                enabled: hasImages,
-                icon: const Icon(Icons.download_outlined),
-                onSelected: (format) => _download(detail!, format),
-                itemBuilder: (_) => [
-                  PopupMenuItem(
-                    value: 'album',
-                    child: Text(
-                      defaultTargetPlatform == TargetPlatform.windows
-                          ? '保存全部图片'
-                          : '全部保存到系统相册',
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, pageConstraints) => FutureBuilder<domain.LessonDetail>(
+      future: _detail,
+      builder: (context, snapshot) {
+        // The header menu and body use the same breakpoint, including embedded
+        // detail panes and short landscape windows.
+        final wide = useWideClassroom(
+          BoxConstraints(
+            maxWidth: pageConstraints.maxWidth,
+            maxHeight:
+                (pageConstraints.maxHeight -
+                        kToolbarHeight -
+                        MediaQuery.paddingOf(context).top)
+                    .clamp(0.0, double.infinity)
+                    .toDouble(),
+          ),
+        );
+        final detail = snapshot.data;
+        final available =
+            snapshot.connectionState == ConnectionState.done &&
+            !snapshot.hasError &&
+            detail != null &&
+            !detail.lesson.oldVersion;
+        final hasImages =
+            available &&
+            detail.reviewSlides.any((slide) => slide.imageUrl.isNotEmpty);
+        final currentSlide = available && detail.reviewSlides.isNotEmpty
+            ? detail.reviewSlides[_reviewIndex.clamp(
+                0,
+                detail.reviewSlides.length - 1,
+              )]
+            : null;
+        return Scaffold(
+          appBar: fullTitleAppBar(
+            context,
+            title: widget.lesson.title,
+            automaticallyImplyLeading: !widget.embedded,
+            actions: [
+              if (_downloading)
+                const SizedBox(
+                  width: 48,
+                  child: Center(
+                    child: SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                  const PopupMenuItem(value: 'zip', child: Text('导出全部图片 ZIP')),
-                  const PopupMenuItem(value: 'pptx', child: Text('导出完整 PPTX')),
-                ],
-              ),
-          ],
-        ),
-        body: snapshot.hasError
-            ? ContentMessage(snapshot.error.toString(), retry: _reload)
-            : detail == null
-            ? const Center(child: CircularProgressIndicator())
-            : detail.lesson.oldVersion
-            ? const ContentMessage('此旧版课堂暂不支持查看详情，请使用官方客户端查看。')
-            : LayoutBuilder(
-                builder: (context, constraints) => useWideClassroom(constraints)
-                    ? _wideReview(detail, constraints)
-                    : RefreshIndicator(
-                        onRefresh: _reload,
-                        child: CustomScrollView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          slivers: [
-                            SliverPadding(
-                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                              sliver: SliverToBoxAdapter(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    _summary(detail),
-                                    const Divider(height: 24),
-                                    if (!detail.answersKnown)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 12,
-                                        ),
-                                        child: Text(
-                                          detail.answerError ??
-                                              '作答状态未同步，已有答案可能未显示',
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.bodySmall,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            if (detail.reviewSlides.isEmpty)
-                              const SliverToBoxAdapter(
-                                child: ContentMessage('暂无课堂回顾'),
-                              )
-                            else
+                )
+              else
+                PopupMenuButton<String>(
+                  key: const ValueKey('review-download-menu'),
+                  tooltip: '下载课件',
+                  enabled: hasImages,
+                  icon: const Icon(Icons.download_outlined),
+                  onSelected: (format) {
+                    if (format == 'image') {
+                      if (currentSlide != null) {
+                        _download(detail!, format, slide: currentSlide);
+                      }
+                    } else {
+                      _download(detail!, format);
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    if (wide)
+                      PopupMenuItem(
+                        value: 'image',
+                        enabled:
+                            currentSlide != null &&
+                            currentSlide.imageUrl.isNotEmpty,
+                        child: Text(
+                          defaultTargetPlatform == TargetPlatform.windows
+                              ? '保存当前页图片'
+                              : '当前页保存到系统相册',
+                        ),
+                      ),
+                    PopupMenuItem(
+                      value: 'album',
+                      child: Text(
+                        defaultTargetPlatform == TargetPlatform.windows
+                            ? '保存全部图片'
+                            : '全部保存到系统相册',
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'zip',
+                      child: Text('导出全部图片 ZIP'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'pptx',
+                      child: Text('导出完整 PPTX'),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          body: snapshot.hasError
+              ? ContentMessage(snapshot.error.toString(), retry: _reload)
+              : detail == null
+              ? const Center(child: CircularProgressIndicator())
+              : detail.lesson.oldVersion
+              ? const ContentMessage('此旧版课堂暂不支持查看详情，请使用官方客户端查看。')
+              : LayoutBuilder(
+                  builder: (context, constraints) => wide
+                      ? _wideReview(detail, constraints)
+                      : RefreshIndicator(
+                          onRefresh: _reload,
+                          child: CustomScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            slivers: [
                               SliverPadding(
                                 padding: const EdgeInsets.fromLTRB(
                                   16,
-                                  0,
+                                  8,
                                   16,
-                                  20,
+                                  0,
                                 ),
-                                sliver: SliverList.builder(
-                                  itemCount: detail.reviewSlides.length,
-                                  itemBuilder: (context, index) {
-                                    final slide = detail.reviewSlides[index];
-                                    return ReviewSlideCard(
-                                      key: ValueKey(
-                                        'review-${slide.id}-$index',
-                                      ),
-                                      slide: slide,
-                                      page: index + 1,
-                                      record:
-                                          slide.ownAnswer ??
-                                          detail.answers[slide.question?.id],
-                                      onSave: _downloading
-                                          ? null
-                                          : () => _download(
-                                              detail,
-                                              'image',
-                                              slide: slide,
-                                            ),
-                                    );
-                                  },
+                                sliver: SliverToBoxAdapter(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      _summary(detail),
+                                      const Divider(height: 24),
+                                      if (!detail.answersKnown)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 12,
+                                          ),
+                                          child: Text(
+                                            detail.answerError ??
+                                                '作答状态未同步，已有答案可能未显示',
+                                            style: Theme.of(
+                                              context,
+                                            ).textTheme.bodySmall,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                          ],
+                              if (detail.reviewSlides.isEmpty)
+                                const SliverToBoxAdapter(
+                                  child: ContentMessage('暂无课堂回顾'),
+                                )
+                              else
+                                SliverPadding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    0,
+                                    16,
+                                    20,
+                                  ),
+                                  sliver: SliverList.builder(
+                                    itemCount: detail.reviewSlides.length,
+                                    itemBuilder: (context, index) {
+                                      final slide = detail.reviewSlides[index];
+                                      return ReviewSlideCard(
+                                        key: ValueKey(
+                                          'review-${slide.id}-$index',
+                                        ),
+                                        slide: slide,
+                                        page: index + 1,
+                                        record:
+                                            slide.ownAnswer ??
+                                            detail.answers[slide.question?.id],
+                                        onSave: _downloading
+                                            ? null
+                                            : () => _download(
+                                                detail,
+                                                'image',
+                                                slide: slide,
+                                              ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-              ),
-      );
-    },
+                ),
+        );
+      },
+    ),
   );
 }
 

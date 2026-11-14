@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -56,6 +57,12 @@ class _Api extends RainApi {
 }
 
 class _Controller extends AppController {
+  List<Slide> reviewSlides = _slides;
+  final savedSlideIds = <String>[];
+
+  @override
+  Future<void> saveSlide(Slide slide) async => savedSlideIds.add(slide.id);
+
   _Controller()
     : super(
         api: _Api(),
@@ -89,12 +96,12 @@ class _Controller extends AppController {
   Future<AttendanceStatus> loadAttendance(Lesson lesson) async =>
       AttendanceStatus.signed;
   @override
-  Future<LessonDetail> loadDetail(Lesson lesson) async => const LessonDetail(
+  Future<LessonDetail> loadDetail(Lesson lesson) async => LessonDetail(
     lesson: _lesson,
     checkinText: '已签到',
     teacher: '教师甲',
     answersKnown: true,
-    reviewSlides: _slides,
+    reviewSlides: reviewSlides,
     answers: {
       'q': AnswerRecord(
         problemId: 'q',
@@ -363,6 +370,141 @@ void main() {
     expect(find.byType(CourseLessonsPage), findsOneWidget);
     expect(tester.takeException(), isNull);
     await _capture(tester, 'master-detail-1280x800');
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  for (final embedded in [false, true]) {
+    for (final size in [const Size(1280, 800), const Size(800, 480)]) {
+      testWidgets('横屏下载菜单保存当前页且预览标出题目 $size embedded=$embedded', (
+        tester,
+      ) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final controller = _Controller();
+        await _mount(
+          tester,
+          LessonDetailPage(
+            controller: controller,
+            lesson: _lesson,
+            embedded: embedded,
+          ),
+          size,
+          1,
+        );
+        expect(
+          find.byKey(const ValueKey('review-wide-layout')),
+          findsOneWidget,
+        );
+        final problemPage = find.byKey(const ValueKey('review-thumbnail-0'));
+        final ordinaryPage = find.byKey(const ValueKey('review-thumbnail-1'));
+        expect(
+          find.descendant(
+            of: problemPage,
+            matching: find.byIcon(Icons.quiz_outlined),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: problemPage, matching: find.text('主观题')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: ordinaryPage,
+            matching: find.byIcon(Icons.quiz_outlined),
+          ),
+          findsNothing,
+        );
+        expect(find.byIcon(Icons.save_alt_rounded), findsNothing);
+        expect(find.byTooltip('下载课件'), findsOneWidget);
+
+        await tester.tap(find.byTooltip('下载课件'));
+        await tester.pumpAndSettle();
+        final items = tester
+            .widgetList<PopupMenuItem<String>>(
+              find.byType(PopupMenuItem<String>),
+            )
+            .toList();
+        expect(items.first.value, 'image');
+        expect(items.first.enabled, isTrue);
+        await tester.tap(find.byWidget(items.first));
+        await tester.pumpAndSettle();
+        expect(controller.savedSlideIds, ['slide-1']);
+
+        await tester.tap(find.byTooltip('下一页'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('下载课件'));
+        await tester.pumpAndSettle();
+        final secondItems = tester
+            .widgetList<PopupMenuItem<String>>(
+              find.byType(PopupMenuItem<String>),
+            )
+            .toList();
+        await tester.tap(find.byWidget(secondItems.first));
+        await tester.pumpAndSettle();
+        expect(controller.savedSlideIds, ['slide-1', 'slide-2']);
+        expect(find.byIcon(Icons.save_alt_rounded), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+      });
+    }
+  }
+
+  testWidgets('无图片的当前页禁用横屏菜单单页保存，其余导出仍可用', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final controller = _Controller()
+      ..reviewSlides = [
+        _slides.first,
+        const Slide(
+          id: 'text-only',
+          index: 1,
+          imageUrl: '',
+          question: _question,
+        ),
+      ];
+    await _mount(
+      tester,
+      LessonDetailPage(controller: controller, lesson: _lesson),
+      const Size(1180, 800),
+      1,
+    );
+    await tester.tap(find.byTooltip('下一页'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('下载课件'));
+    await tester.pumpAndSettle();
+    final items = tester
+        .widgetList<PopupMenuItem<String>>(find.byType(PopupMenuItem<String>))
+        .toList();
+    expect(items.first.value, 'image');
+    expect(items.first.enabled, isFalse);
+    expect(items.skip(1).every((item) => item.enabled), isTrue);
+    expect(controller.savedSlideIds, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('竖屏仍逐页保存且下载菜单不增加单页入口', (tester) async {
+    final controller = _Controller();
+    await _mount(
+      tester,
+      LessonDetailPage(controller: controller, lesson: _lesson),
+      const Size(360, 800),
+      1,
+    );
+    expect(find.byType(ReviewSlideCard), findsWidgets);
+    expect(find.byIcon(Icons.save_alt_rounded), findsWidgets);
+    await tester.tap(find.byTooltip('下载课件'));
+    await tester.pumpAndSettle();
+    final items = tester
+        .widgetList<PopupMenuItem<String>>(find.byType(PopupMenuItem<String>))
+        .toList();
+    expect(items.any((item) => item.value == 'image'), isFalse);
+    expect(items.first.value, 'album');
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });

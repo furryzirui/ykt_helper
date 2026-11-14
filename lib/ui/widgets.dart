@@ -213,21 +213,31 @@ class SlideThumbnail extends StatelessWidget {
   final domain.Slide slide;
   final int page;
   final bool selected;
+
+  /// Allows a classroom's separately synchronized question data to label a page.
+  final String? questionLabel;
   final VoidCallback onTap;
   const SlideThumbnail({
     super.key,
     required this.slide,
     required this.page,
     required this.selected,
+    this.questionLabel,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final label = questionLabel?.trim().isNotEmpty == true
+        ? questionLabel!.trim()
+        : slide.question?.typeLabel ?? (slide.ownAnswer == null ? null : '题目');
     return Semantics(
+      label: '第 $page 页${label == null ? '' : '，含题目，$label'}',
       selected: selected,
       button: true,
+      onTap: onTap,
+      excludeSemantics: true,
       child: Material(
         color: selected
             ? scheme.primaryContainer
@@ -257,11 +267,56 @@ class SlideThumbnail extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-                child: Text(
-                  '$page',
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  style: Theme.of(context).textTheme.labelSmall,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '$page',
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                    if (label != null) ...[
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Tooltip(
+                          message: label,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.quiz_outlined,
+                                  size: 13,
+                                  color: scheme.onPrimaryContainer,
+                                ),
+                                const SizedBox(width: 3),
+                                Flexible(
+                                  child: Text(
+                                    label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: scheme.onPrimaryContainer,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
