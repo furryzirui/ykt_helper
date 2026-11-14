@@ -1,25 +1,26 @@
 # 1.0.2 验收记录
 
-版本：1.0.2+9；日期：2026-11-14；状态：待用户再次验收，不发布 Release。代码提交：`83739aa3d40dd90924dd4996f62ade2a1e1d8f16`。本次产物替代上一轮 1.0.2+8 验收包。
+版本：1.0.2+10；日期：2026-11-15；状态：待用户再次验收，不发布 Release。代码提交：`255855ab8f27794978a57d4b986b0dad4ce7f3b9`。本次产物替代上一轮 1.0.2+9 验收包。
 
-- 318 项 Flutter 测试通过，静态分析无问题；Windows 自启动通过 81 项隔离注册表检查。测试使用专用临时键，没有修改本机真实启动项。
+- 323 项 Flutter 测试通过，静态分析无问题；Windows 自启动通过 81 项隔离注册表检查。测试使用专用临时键，没有修改本机真实启动项。
 - Windows 自启动识别全零启用状态；未知格式允许开启，仅系统明确禁用时阻止开启。自动化页移除权限跳转按钮，权限页入口保留。
 - 设置自动保存：开关和选项即时保存，文本停止编辑 600 毫秒后保存，返回前刷新待保存内容。无效输入保留草稿，仍允许关闭自动化；保存失败提供重试。测试覆盖快速连续修改、异步模型获取、返回页面和真实控制器持久化。
 - 固定答案使用 A–D 单选及多选按钮，之后独立显示判断答案，默认“正确”。任意两个选项均按判断题处理，手动作答与自动答题保持一致；题目选项更新后会清除失效选择。固定填空为每个空重复填写完整内容，不再按行或分号拆分。
+- 修复自动答题关闭后，隐藏的 AI 配置仍阻止签到和服务设置保存的问题。新增 Windows 界面与真实持久化回归，覆盖已有或不完整 AI 配置、模型请求中关闭答题及迟到结果；重新开启自动答题仍要求配置完整。
 - 应用自启动设置项保持常驻；Android 未启用自动启动服务时显示“请在启用自动启动服务后开启”。已检查手机及横屏布局、1.0 / 1.5 字号与固定答案选项截图。
 
 ## 构建与安装包核验
 
-- 两个 Android 正式签名 APK 已核对包名、1.0.2+9、最低 API 26、target API 36、发布证书、v2 签名和 ZIP CRC。arm64 包仅含 arm64-v8a，universal 包包含 arm64-v8a、armeabi-v7a、x86_64。
-- [Windows / iOS CI](https://github.com/furryzirui/ykt_helper/actions/runs/43611874177) 与 [Android CI](https://github.com/furryzirui/ykt_helper/actions/runs/43611859927) 均通过；Windows 的 81 项原生授权检查也在 CI 通过。
+- 两个 Android 正式签名 APK 已核对包名、1.0.2+10、最低 API 26、target API 36、发布证书、v2 签名和 ZIP CRC。arm64 包仅含 arm64-v8a，universal 包包含 arm64-v8a、armeabi-v7a、x86_64。
+- [Windows / iOS CI](https://github.com/furryzirui/ykt_helper/actions/runs/43614853869) 与 [Android CI](https://github.com/furryzirui/ykt_helper/actions/runs/43614838379) 均通过；Windows 的 81 项原生授权检查也在 CI 通过。
 - Windows 安装器的 PE、版本及 CI 打包载荷证据通过核验；未本地解包重算 EXE 内部文件。iOS 核对版本、arm64、主程序未签名、ZIP CRC、Ed25519 清单签名及全部 50 个受校验文件摘要。
 
 | 安装包 | SHA-256 |
 | --- | --- |
-| Android arm64-v8a | `9c7d67cb042ea4d765ec48252908041b442af7d7f325520baf5f4fdc1c810431` |
-| Android universal | `bbe5da5b04d001f3601a532279b38825a0ab4a3e56ff4341a13c65b271766b82` |
-| Windows EXE 安装器 | `680241a2b34aea04c695d28f31904095d201950cddedd5b4b0bfa80ebdd56411` |
-| iOS 未签名 IPA | `da1c608d2e2483413956be489cac9f744fab6111977603b9c5868e55b2a227ae` |
+| Android arm64-v8a | `15fef82820d003c0634428a9281fd4aa51baadc210a5ef90bcbf9edf1e4e44f0` |
+| Android universal | `f2366b5abeaa019e5576582c571b51b4731ecd9618c98ceaf78d8c75e2faa461` |
+| Windows EXE 安装器 | `60e79a0f46d3f27964a3cd1363f569508eb3b2d24e6e902f7c8553a14045f893` |
+| iOS 未签名 IPA | `f6a1ce99641dbad72222578768c7ab30ad651ed46e91782587a78306e96d2786` |
 
 本轮未安装或操作目标设备。Windows 登录启动及托盘、Android 厂商自启动限制、开机和进程回收后的恢复、真实扫码及 iOS 权限仍需用户在设备验收。Android 无统一的厂商自启动授权查询接口，强行停止和厂商限制可能阻止恢复；iOS 不提供应用自启动。
 
