@@ -2,7 +2,7 @@
 
 普通版雨课堂辅助工具，支持 Android、Windows 和 iOS。
 
-**稳定版 1.0.1** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/latest) · [GPL-3.0](LICENSE)
+**稳定版 1.0.2** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/latest) · [GPL-3.0](LICENSE)
 
 ## 功能
 
@@ -12,6 +12,7 @@
 - AI 模型自动获取、自定义提示词及课件发送范围。
 - 课件图片保存相册，ZIP / 完整图片版 PPTX 导出。
 - 三种登录方式、权限设置、本机日志查看与导出。
+- 应用自启动：Windows 登录启动，Android 在系统允许范围内开机恢复自动化。
 
 ## 使用
 
@@ -34,7 +35,7 @@ flutter test
 flutter build apk --release
 ```
 
-各平台构建及签名见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification-1.0.1.md)。请勿提交账号凭证或签名私钥。
+各平台构建及签名见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification-1.0.2.md)。请勿提交账号凭证或签名私钥。
 
 ## 许可证
 
