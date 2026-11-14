@@ -21,7 +21,7 @@ if (-not $versionLine -or $versionLine -notmatch '^version:\s*(\d+\.\d+\.\d+)(?:
 }
 $appVersion = $Matches[1]
 
-foreach ($required in @('ykt_helper.exe', 'flutter_windows.dll', 'data/icudtl.dat', 'data/flutter_assets')) {
+foreach ($required in @('ykt_helper.exe', 'flutter_windows.dll', 'WebView2Loader.dll', 'data/icudtl.dat', 'data/flutter_assets')) {
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDir $required))) {
         throw "Missing Windows release component: $required. Run flutter build windows --release first."
     }

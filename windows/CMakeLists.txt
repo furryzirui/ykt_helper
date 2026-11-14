@@ -62,6 +62,9 @@ include(flutter/generated_plugins.cmake)
 if(MSVC AND TARGET webview_windows_plugin)
   target_compile_definitions(webview_windows_plugin PRIVATE
     _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+  # The plugin links the dynamic loader but omits it from its bundled libraries.
+  list(APPEND PLUGIN_BUNDLED_LIBRARIES
+    "$<TARGET_FILE_DIR:webview_windows_plugin>/WebView2Loader.dll")
 endif()
 
 
