@@ -175,6 +175,8 @@ class _AutomationPageState extends State<AutomationPage>
   }
 
   String? _validationError(AppSettings value) {
+    // Inactive answer settings must not block sign-in or startup preferences.
+    if (!value.autoAnswer) return null;
     if (value.autoSubmit &&
         (value.autoSubmitDelaySeconds < 1 ||
             value.autoSubmitDelaySeconds > 3600)) {

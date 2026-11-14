@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
+import 'package:ykt_helper/services/ai_answer.dart';
 import 'package:ykt_helper/services/app_autostart.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 import 'package:ykt_helper/ui/automation_page.dart';
@@ -73,6 +74,19 @@ class _Background extends BackgroundRuntime {
   }
 }
 
+class _Ai extends AiAnswerService {
+  int modelRequests = 0;
+
+  @override
+  Future<List<String>> models({
+    required String baseUrl,
+    required String apiKey,
+  }) async {
+    modelRequests++;
+    return ['saved-model'];
+  }
+}
+
 Future<void> _mount(WidgetTester tester, AppController controller) async {
   await tester.pumpWidget(
     MaterialApp(home: AutomationPage(controller: controller)),
@@ -87,6 +101,90 @@ Future<void> _show(WidgetTester tester, Finder target) async {
 }
 
 void main() {
+  for (final complete in [true, false]) {
+    testWidgets('答题关闭且AI配置${complete ? '完整' : '不完整'}时签到和服务独立持久化', (
+      tester,
+    ) async {
+      final store = _MemoryStore();
+      final ai = _Ai();
+      final initial = AppSettings(
+        answerMode: AnswerMode.ai,
+        baseUrl: 'https://offline.invalid/v1',
+        apiKey: complete ? 'offline-only' : '',
+        model: complete ? 'saved-model' : '',
+      );
+      store.values['settings'] = jsonEncode(initial.toJson());
+      final controller =
+          AppController(
+              store: store,
+              ai: ai,
+              autostart: _Autostart(),
+              background: _Background(),
+              startTimers: false,
+              connectSockets: false,
+            )
+            ..initialized = true
+            ..settings = initial;
+      addTearDown(controller.dispose);
+      await _mount(tester, controller);
+      expect(ai.modelRequests, 0);
+
+      await tester.tap(find.byKey(const ValueKey('auto-enter')));
+      await tester.pumpAndSettle();
+      expect(controller.settings.autoEnter, isTrue);
+      expect(store.persisted.autoEnter, isTrue);
+      expect(controller.settings.autoAnswer, isFalse);
+      expect(store.persisted.autoAnswer, isFalse);
+      expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+      expect(ai.modelRequests, 0);
+
+      await tester.tap(find.byKey(const ValueKey('auto-start-service')));
+      await tester.pumpAndSettle();
+      expect(controller.settings.autoStartService, isTrue);
+      expect(store.persisted.autoStartService, isTrue);
+      expect(controller.settings.autoEnter, isTrue);
+      expect(store.persisted.autoAnswer, isFalse);
+      expect(store.settingsWrites, hasLength(2));
+      expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+      expect(ai.modelRequests, 0);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  testWidgets('重新开启不完整AI答题时仍不持久化开启状态', (tester) async {
+    final store = _MemoryStore();
+    final ai = _Ai();
+    final initial = AppSettings(
+      autoEnter: true,
+      answerMode: AnswerMode.ai,
+      baseUrl: 'https://offline.invalid/v1',
+    );
+    store.values['settings'] = jsonEncode(initial.toJson());
+    final controller =
+        AppController(
+            store: store,
+            ai: ai,
+            autostart: _Autostart(),
+            background: _Background(),
+            startTimers: false,
+            connectSockets: false,
+          )
+          ..initialized = true
+          ..settings = initial;
+    addTearDown(controller.dispose);
+    await _mount(tester, controller);
+    await tester.tap(find.byKey(const ValueKey('auto-answer')));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoAnswer, isFalse);
+    expect(store.persisted.autoAnswer, isFalse);
+    expect(store.persisted.autoEnter, isTrue);
+    expect(store.settingsWrites, isEmpty);
+    expect(find.byKey(const ValueKey('automation-save-error')), findsOneWidget);
+    expect(ai.modelRequests, 0);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('无效答案保持持久化配置，关闭自动提交即时保存且补全后不复活', (tester) async {
     final store = _MemoryStore();
     final initial = AppSettings(

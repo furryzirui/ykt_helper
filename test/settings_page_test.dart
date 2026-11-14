@@ -183,6 +183,63 @@ Future<void> _type(WidgetTester tester, String key, String text) async {
 }
 
 void main() {
+  testWidgets('Windows关闭AI答题时签到和自启无需获取模型即可自动保存', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final ai = _Ai();
+    final controller = _Controller(ai)
+      ..settings = AppSettings(
+        answerMode: AnswerMode.ai,
+        baseUrl: 'https://ai.example.com/v1',
+        apiKey: 'key',
+        model: 'known',
+      );
+    await _show(tester, controller);
+    await tester.pumpAndSettle();
+    await tester.tap(_setting('auto-enter'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoEnter, isTrue);
+    expect(controller.settings.autoAnswer, isFalse);
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    await tester.tap(_setting('app-auto-start'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开启'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.appAutoStart, isTrue);
+    expect(controller.settings.model, 'known');
+    expect(controller.settings.apiKey, 'key');
+    expect(ai.requests, isEmpty);
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    await _close(tester, controller);
+  });
+
+  testWidgets('获取模型期间关闭自动答题会清除保存错误且忽略迟到模型结果', (tester) async {
+    final ai = _Ai();
+    final controller = _Controller(ai)
+      ..settings = AppSettings(
+        autoEnter: true,
+        autoAnswer: true,
+        answerMode: AnswerMode.ai,
+        baseUrl: 'https://ai.example.com/v1',
+        apiKey: 'key',
+        model: 'known',
+      );
+    await _show(tester, controller);
+    await tester.pump(const Duration(milliseconds: 501));
+    expect(ai.requests, hasLength(1));
+    await tester.tap(_setting('auto-answer'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoAnswer, isFalse);
+    expect(controller.settings.autoEnter, isTrue);
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    ai.requests.single.response.complete(['different-model']);
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoAnswer, isFalse);
+    expect(controller.settings.model, 'known');
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    await _close(tester, controller);
+  });
+
   testWidgets('首次加载和无变化模型刷新不保存，也不显示保存按钮', (tester) async {
     final ai = _Ai();
     final controller = _Controller(ai)
