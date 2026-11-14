@@ -183,6 +183,149 @@ Future<void> _type(WidgetTester tester, String key, String text) async {
 }
 
 void main() {
+  testWidgets('右上角只显示保存结果，连续保存期间无加载图标或结果闪空', (tester) async {
+    final controller = _Controller(_Ai())
+      ..settings = AppSettings(autoAnswer: true);
+    await _show(tester, controller);
+    expect(tester.widget<Text>(_setting('automation-status')).data, isEmpty);
+    await _reveal(tester, _setting('fixedSingle-B'));
+    await tester.tap(_setting('fixedSingle-B'));
+    await tester.pumpAndSettle();
+    expect(find.text('已自动保存'), findsOneWidget);
+    final gate = Completer<void>();
+    controller.pendingSave = gate;
+    await tester.tap(_setting('fixedSingle-C'));
+    await tester.pump();
+    expect(controller.settings.fixedSingleAnswer, 'B');
+    expect(find.text('已自动保存'), findsOneWidget);
+    expect(find.byIcon(Icons.sync_rounded), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(tester.widget<AppBar>(find.byType(AppBar)).bottom, isNull);
+    gate.complete();
+    controller.pendingSave = null;
+    await tester.pumpAndSettle();
+    expect(controller.settings.fixedSingleAnswer, 'C');
+    expect(find.text('已自动保存'), findsOneWidget);
+    await _close(tester, controller);
+  });
+
+  testWidgets('慢速模型发现不闪临时错误，选择模型只更新右上角保存结果', (tester) async {
+    final ai = _Ai();
+    final controller = _Controller(ai)
+      ..settings = AppSettings(
+        autoAnswer: true,
+        baseUrl: 'https://ai.example.com/v1',
+        apiKey: 'key',
+      );
+    await _show(tester, controller);
+    await _reveal(tester, find.text('自定义 AI'));
+    await tester.tap(find.text('自定义 AI'));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    expect(controller.settings.answerMode, AnswerMode.fixed);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(ai.requests, hasLength(1));
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('正在获取模型…'), findsNothing);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    expect(controller.settings.answerMode, AnswerMode.fixed);
+    ai.requests.single.response.complete(['model-a', 'model-b']);
+    await tester.pumpAndSettle();
+    expect(controller.settings.model, 'model-a');
+    expect(find.text('已自动保存'), findsOneWidget);
+    expect(find.text('已选择首个模型，可切换'), findsNothing);
+    final gate = Completer<void>();
+    controller.pendingSave = gate;
+    final selector = find.byWidgetPredicate(
+      (widget) => widget is DropdownButtonFormField<String>,
+    );
+    tester.widget<DropdownButtonFormField<String>>(selector).onChanged!(
+      'model-b',
+    );
+    await tester.pump();
+    expect(find.text('已自动保存'), findsOneWidget);
+    expect(find.byIcon(Icons.sync_rounded), findsNothing);
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    gate.complete();
+    controller.pendingSave = null;
+    await tester.pumpAndSettle();
+    expect(controller.settings.model, 'model-b');
+    expect(find.text('已自动保存'), findsOneWidget);
+    await _close(tester, controller);
+  });
+
+  testWidgets('模型失败仅显示右上角原因，点击状态可重试且不重复页内提示', (tester) async {
+    final ai = _Ai();
+    final controller = _Controller(ai)
+      ..settings = AppSettings(
+        autoAnswer: true,
+        answerMode: AnswerMode.ai,
+        baseUrl: 'https://ai.example.com/v1',
+        apiKey: 'key',
+        model: 'known',
+      );
+    await _show(tester, controller);
+    await tester.pump(const Duration(milliseconds: 501));
+    ai.requests.single.response.completeError(
+      const ApiFailure('模型服务返回 HTTP 404'),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('模型服务返回 HTTP 404'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: _setting('automation-status'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.widget<AppBar>(find.byType(AppBar)).bottom, isNull);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.tap(_setting('automation-status'));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(ai.requests, hasLength(2));
+    expect(find.textContaining('模型服务返回 HTTP 404'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    ai.requests.last.response.complete(['known']);
+    await tester.pumpAndSettle();
+    expect(controller.saves, 0);
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    await _close(tester, controller);
+  });
+
+  testWidgets('刷新模型列表会清除旧失败原因并等待新请求结果', (tester) async {
+    final ai = _Ai();
+    final controller = _Controller(ai)
+      ..settings = AppSettings(
+        autoAnswer: true,
+        answerMode: AnswerMode.ai,
+        baseUrl: 'https://ai.example.com/v1',
+        apiKey: 'key',
+        model: 'known',
+      );
+    await _show(tester, controller);
+    await tester.pump(const Duration(milliseconds: 501));
+    ai.requests.single.response.completeError(
+      const ApiFailure('模型服务返回 HTTP 404'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(_setting('auto-enter'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('模型服务返回 HTTP 404'), findsOneWidget);
+    await _reveal(tester, find.byTooltip('刷新模型列表'));
+    await tester.tap(find.byTooltip('刷新模型列表'));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(ai.requests, hasLength(2));
+    expect(find.textContaining('模型服务返回 HTTP 404'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    ai.requests.last.response.complete(['known']);
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoEnter, isTrue);
+    expect(find.text('已自动保存'), findsOneWidget);
+    await _close(tester, controller);
+  });
+
   testWidgets('Windows关闭AI答题时签到和自启无需获取模型即可自动保存', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -385,7 +528,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('开启'));
     await tester.pumpAndSettle();
-    expect(find.text('无法添加自启动项，请重试'), findsOneWidget);
+    expect(find.textContaining('无法添加自启动项，请重试'), findsOneWidget);
     expect(controller.settings.appAutoStart, isFalse);
     expect(controller.saves, 0);
     await _close(tester, controller);
@@ -640,7 +783,7 @@ void main() {
     );
     expect(find.textContaining('保存失败'), findsOneWidget);
     controller.saveError = null;
-    await tester.tap(find.byTooltip('重试自动保存'));
+    await tester.tap(_setting('automation-status'));
     await tester.pumpAndSettle();
     expect(controller.settings.fixedSubjectiveAnswer, 'C');
     expect(find.text('保存设置'), findsNothing);
@@ -674,7 +817,14 @@ void main() {
     await tester.tap(find.text('自定义 AI'));
     await tester.pump();
     expect(controller.settings.answerMode, AnswerMode.fixed);
-    expect(find.textContaining('固定内容答题设置仍生效'), findsOneWidget);
+    expect(find.textContaining('未保存：请填写有效的 AI base_url'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: _setting('automation-status'),
+      ),
+      findsOneWidget,
+    );
     await _type(tester, 'baseUrl', 'https://ai.example.com/v1');
     await _type(tester, 'apiKey', 'key');
     await tester.pump(const Duration(milliseconds: 501));
@@ -722,7 +872,14 @@ void main() {
     ai.requests.last.response.completeError(StateError('private-key'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pumpAndSettle();
-    expect(find.text('模型列表获取失败，请检查地址和密钥后重试'), findsOneWidget);
+    expect(find.textContaining('模型列表获取失败，请检查地址和密钥后重试'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: _setting('automation-status'),
+      ),
+      findsOneWidget,
+    );
     expect(
       find.byWidgetPredicate(
         (widget) =>

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -37,6 +38,47 @@ class _Ai extends AiAnswerService {
     required String baseUrl,
     required String apiKey,
   }) async => ['vision-model'];
+}
+
+class _StatusAi extends AiAnswerService {
+  final requests = <Completer<List<String>>>[];
+
+  @override
+  Future<List<String>> models({
+    required String baseUrl,
+    required String apiKey,
+  }) {
+    final request = Completer<List<String>>();
+    requests.add(request);
+    return request.future;
+  }
+}
+
+class _StatusController extends AppController {
+  String? saveError;
+  Completer<void>? pendingSave;
+  int saves = 0;
+
+  _StatusController({AiAnswerService? ai})
+    : super(
+        store: _Store(),
+        ai: ai ?? _Ai(),
+        startTimers: false,
+        connectSockets: false,
+      ) {
+    initialized = true;
+    settings = AppSettings(autoAnswer: true);
+  }
+
+  @override
+  Future<void> saveSettings([AppSettings? next]) async {
+    saves++;
+    final candidate = AppSettings.fromJson((next ?? settings).toJson());
+    await pendingSave?.future;
+    if (saveError != null) throw ApiFailure(saveError!);
+    settings = candidate;
+    notifyListeners();
+  }
 }
 
 class _Permissions extends AppPermissions {
@@ -90,7 +132,11 @@ Future<void> _mount(WidgetTester tester, Widget page) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> _capture(WidgetTester tester, String name) async {
+Future<void> _capture(
+  WidgetTester tester,
+  String name, {
+  String folder = 'qa-1.0.1',
+}) async {
   expect(tester.takeException(), isNull, reason: name);
   if (!_screenshots) return;
   final boundary = tester.renderObject<RenderRepaintBoundary>(
@@ -100,12 +146,73 @@ Future<void> _capture(WidgetTester tester, String name) async {
     final image = await boundary.toImage(pixelRatio: 2);
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();
-    final dir = Directory('.workspace-bootstrap/qa-1.0.1');
+    final dir = Directory('.workspace-bootstrap/$folder');
     await dir.create(recursive: true);
     await File(
       '${dir.path}/$name.png',
     ).writeAsBytes(bytes!.buffer.asUint8List());
   });
+}
+
+Future<void> _openStatusPage(
+  WidgetTester tester,
+  AppController controller,
+) async {
+  await _mount(
+    tester,
+    Builder(
+      builder: (context) => Scaffold(
+        body: Center(
+          child: TextButton(
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute(
+                builder: (_) => AutomationPage(controller: controller),
+              ),
+            ),
+            child: const Text('打开自动化'),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('打开自动化'));
+  await tester.pumpAndSettle();
+  expect(find.byType(BackButton), findsOneWidget);
+}
+
+void _checkStatusGeometry(
+  WidgetTester tester,
+  Size size,
+  Rect appBar,
+  Rect firstSetting,
+) {
+  final status = find.byKey(const ValueKey('automation-status'));
+  final title = find.descendant(
+    of: find.byType(AppBar),
+    matching: find.text('自动化'),
+  );
+  final statusText = tester.widget<Text>(status);
+  final statusRect = tester.getRect(status);
+  final titleRect = tester.getRect(title);
+  expect(statusText.maxLines, 1);
+  expect(statusText.overflow, TextOverflow.ellipsis);
+  if (statusText.data?.isNotEmpty == true) {
+    expect(statusRect.width, greaterThan(0));
+  }
+  expect(statusRect.left, greaterThanOrEqualTo(titleRect.right));
+  expect(statusRect.right, lessThanOrEqualTo(size.width));
+  expect(statusRect.top, greaterThanOrEqualTo(appBar.top));
+  expect(statusRect.bottom, lessThanOrEqualTo(appBar.bottom));
+  expect(titleRect.width, greaterThan(48));
+  expect(tester.getRect(find.byType(AppBar)), appBar);
+  expect(tester.widget<AppBar>(find.byType(AppBar)).bottom, isNull);
+  expect(
+    tester.getRect(find.byKey(const ValueKey('auto-start-service'))),
+    firstSetting,
+  );
+  expect(find.byType(CircularProgressIndicator), findsNothing);
+  expect(find.byIcon(Icons.sync_rounded), findsNothing);
+  expect(tester.takeException(), isNull);
 }
 
 void _checkCardWidths(WidgetTester tester, double expected) {
@@ -182,6 +289,131 @@ void main() {
           .load();
     }
   });
+  for (final size in [
+    const Size(360, 800),
+    const Size(800, 400),
+    const Size(1280, 800),
+  ]) {
+    for (final scale in [1.0, 1.5]) {
+      final suffix = '${size.width.toInt()}x${size.height.toInt()}-$scale';
+      testWidgets('自动保存长状态保持标题和正文位置 $suffix', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+          tester.platformDispatcher.clearTextScaleFactorTestValue();
+        });
+        final controller = _StatusController();
+        await _openStatusPage(tester, controller);
+        final appBar = tester.getRect(find.byType(AppBar));
+        final firstSetting = tester.getRect(
+          find.byKey(const ValueKey('auto-start-service')),
+        );
+        final autoEnter = find.byKey(const ValueKey('auto-enter'));
+        final status = find.byKey(const ValueKey('automation-status'));
+        await tester.tap(autoEnter);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Text>(status).data, '已自动保存');
+        _checkStatusGeometry(tester, size, appBar, firstSetting);
+        await _capture(
+          tester,
+          'automation-status-saved-$suffix',
+          folder: 'qa-automation-status',
+        );
+
+        const error = '无法保存自动化设置，请检查当前系统权限与本地存储状态后重试，原有设置仍然生效';
+        final pending = Completer<void>();
+        controller
+          ..saveError = error
+          ..pendingSave = pending;
+        await tester.tap(autoEnter);
+        await tester.pump();
+        _checkStatusGeometry(tester, size, appBar, firstSetting);
+        pending.complete();
+        await tester.pumpAndSettle();
+        expect(tester.widget<Text>(status).data, '未保存：$error');
+        final errorSemantics = find.byKey(
+          const ValueKey('automation-save-error'),
+        );
+        expect(
+          find.descendant(of: find.byType(AppBar), matching: errorSemantics),
+          findsOneWidget,
+        );
+        expect(find.byTooltip('未保存：$error，点击重试'), findsOneWidget);
+        _checkStatusGeometry(tester, size, appBar, firstSetting);
+        await _capture(
+          tester,
+          'automation-status-save-error-$suffix',
+          folder: 'qa-automation-status',
+        );
+
+        controller
+          ..saveError = null
+          ..pendingSave = null;
+        await tester.tap(status);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Text>(status).data, '已自动保存');
+        _checkStatusGeometry(tester, size, appBar, firstSetting);
+        expect(controller.saves, 3);
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+      });
+
+      testWidgets('模型发现失败统一在右上角且不移动正文 $suffix', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+          tester.platformDispatcher.clearTextScaleFactorTestValue();
+        });
+        final ai = _StatusAi();
+        final controller = _StatusController(ai: ai)
+          ..settings = AppSettings(
+            autoAnswer: true,
+            answerMode: AnswerMode.ai,
+            baseUrl: 'https://offline.invalid/v1',
+            apiKey: 'offline-only',
+            model: 'vision-model',
+          );
+        await _openStatusPage(tester, controller);
+        final appBar = tester.getRect(find.byType(AppBar));
+        final firstSetting = tester.getRect(
+          find.byKey(const ValueKey('auto-start-service')),
+        );
+        await tester.pump(const Duration(milliseconds: 501));
+        expect(ai.requests, hasLength(1));
+        _checkStatusGeometry(tester, size, appBar, firstSetting);
+        const error = '模型列表获取失败，请检查服务商地址与授权信息，确认模型服务可用后点击此处重试';
+        ai.requests.single.completeError(const ApiFailure(error));
+        await tester.pumpAndSettle();
+        final status = find.byKey(const ValueKey('automation-status'));
+        expect(tester.widget<Text>(status).data, '未保存：$error');
+        expect(find.byTooltip('未保存：$error，点击重试'), findsOneWidget);
+        expect(find.text(error), findsNothing);
+        _checkStatusGeometry(tester, size, appBar, firstSetting);
+        await _capture(
+          tester,
+          'automation-status-model-error-$suffix',
+          folder: 'qa-automation-status',
+        );
+        await tester.tap(status);
+        await tester.pump(const Duration(milliseconds: 1));
+        expect(ai.requests, hasLength(2));
+        ai.requests.last.complete(['vision-model']);
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('auto-enter')));
+        await tester.pumpAndSettle();
+        expect(tester.widget<Text>(status).data, '已自动保存');
+        _checkStatusGeometry(tester, size, appBar, firstSetting);
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+      });
+    }
+  }
   for (final size in [
     const Size(360, 800),
     const Size(1024, 768),

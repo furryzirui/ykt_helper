@@ -42,7 +42,8 @@ class _AutomationPageState extends State<AutomationPage>
   final _controlRevisions = <String, int>{};
   String? _saveError;
   int _modelGeneration = 0;
-  bool _loadingModels = false, _defaultModelSelected = false;
+  bool _loadingModels = false, _hasSaved = false;
+  static const _modelRequiredError = '请获取并选择当前 AI 服务的模型';
   List<String> _models = [];
   String? _modelsError, _loadedBaseUrl, _loadedApiKey;
   String? _autostartPermission;
@@ -59,6 +60,8 @@ class _AutomationPageState extends State<AutomationPage>
       _loadedApiKey == _draft?.apiKey.trim() &&
       _models.isNotEmpty;
   bool get _modelsReady => _modelsLoaded && _models.contains(_draft?.model);
+  bool get _waitingForModels =>
+      _loadingModels || _modelDebounce?.isActive == true;
 
   @override
   void initState() {
@@ -199,7 +202,7 @@ class _AutomationPageState extends State<AutomationPage>
     }
     if (value.apiKey.trim().isEmpty) return '请填写 api_key';
     if (value.customPrompt.trim().isEmpty) return '请填写 AI 提示词';
-    if (!_modelsReady) return '请获取并选择当前 AI 服务的模型';
+    if (!_modelsReady) return _modelsError ?? _modelRequiredError;
     return null;
   }
 
@@ -259,12 +262,23 @@ class _AutomationPageState extends State<AutomationPage>
       final candidate = validation == null
           ? requested
           : _safetyChanges(requested);
-      if (mounted && !_closing) setState(() => _saveError = validation);
+      if (mounted && !_closing) {
+        setState(() {
+          _saveError = validation == _modelRequiredError && _waitingForModels
+              ? null
+              : validation;
+        });
+      }
       if (_sameSettings(candidate, widget.controller.settings)) {
         if (_sameSettings(requested, widget.controller.settings)) {
           _dirty = false;
           _controlRevisions.clear();
-          if (mounted && !_closing) setState(() => _saveError = null);
+          if (mounted && !_closing) {
+            setState(() {
+              _saveError = null;
+              _hasSaved = true;
+            });
+          }
         }
         _source = widget.controller.settings;
         _cacheDraft();
@@ -292,6 +306,7 @@ class _AutomationPageState extends State<AutomationPage>
             ..autoStartService = committed.autoStartService
             ..appAutoStart = committed.appAutoStart;
           _dirty = !_sameSettings(_draft!, committed);
+          if (!_dirty) _hasSaved = true;
         }
         _cacheDraft();
       } catch (error) {
@@ -320,8 +335,10 @@ class _AutomationPageState extends State<AutomationPage>
     _modelDebounce?.cancel();
     final generation = ++_modelGeneration;
     _loadingModels = false;
+    if (_saveError == _modelsError || _saveError == _modelRequiredError) {
+      _saveError = null;
+    }
     _modelsError = null;
-    _defaultModelSelected = false;
     _models = [];
     _loadedBaseUrl = _loadedApiKey = null;
     final draft = _draft!;
@@ -375,7 +392,6 @@ class _AutomationPageState extends State<AutomationPage>
         _loadingModels = false;
         if (_dirty && !models.contains(_draft!.model)) {
           _draft!.model = models.first;
-          _defaultModelSelected = true;
         }
       });
       if (_dirty && _saveDebounce?.isActive != true) unawaited(_flushSaves());
@@ -396,13 +412,64 @@ class _AutomationPageState extends State<AutomationPage>
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    if (mounted && !_closing) setState(() => _saveError = message);
   }
 
   TextEditingController _field(String name, String value) =>
       _fields.putIfAbsent(name, () => TextEditingController(text: value));
+
+  Future<void> _retryStatus() async {
+    if (_draft?.autoAnswer == true &&
+        _draft?.answerMode == AnswerMode.ai &&
+        !_modelsReady) {
+      setState(() {
+        _saveError = null;
+        _scheduleModels(immediate: true);
+      });
+    }
+    await _flushSaves();
+  }
+
+  Widget _saveStatus(BuildContext context) {
+    final error = _saveError ?? _modelsError;
+    final canRetry = error != null && (_dirty || _modelsError != null);
+    final text = error != null
+        ? '未保存：$error'
+        : _hasSaved
+        ? '已自动保存'
+        : '';
+    return SizedBox(
+      width: (MediaQuery.sizeOf(context).width * .46).clamp(0, 480),
+      child: Padding(
+        padding: const EdgeInsets.only(right: 16),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Semantics(
+            key: error == null ? null : const ValueKey('automation-save-error'),
+            liveRegion: true,
+            child: Tooltip(
+              message: canRetry ? '$text，点击重试' : text,
+              child: InkWell(
+                onTap: canRetry ? _retryStatus : null,
+                child: Text(
+                  text,
+                  key: const ValueKey('automation-status'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: error == null
+                        ? Theme.of(context).colorScheme.onSurfaceVariant
+                        : Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _settingIcon(IconData icon) => TintedIcon(icon);
 
@@ -620,45 +687,7 @@ class _AutomationPageState extends State<AutomationPage>
         child: Scaffold(
           appBar: AppBar(
             title: const Text('自动化'),
-            actions: [
-              if (_saving)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Icon(Icons.sync_rounded, size: 22),
-                ),
-            ],
-            bottom: _saveError == null
-                ? null
-                : PreferredSize(
-                    preferredSize: const Size.fromHeight(66),
-                    child: Padding(
-                      key: const ValueKey('automation-save-error'),
-                      padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.error_outline_rounded,
-                            color: Theme.of(context).colorScheme.error,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '未保存：$_saveError${c.settings.autoAnswer ? '；当前${c.settings.answerMode == AnswerMode.fixed ? '固定内容' : 'AI'}答题设置仍生效' : ''}',
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: '重试自动保存',
-                            onPressed: () => unawaited(_flushSaves()),
-                            icon: const Icon(Icons.refresh_rounded, size: 20),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+            actions: [_saveStatus(context)],
           ),
           body: SettingsList(
             children: [
@@ -934,34 +963,21 @@ class _AutomationPageState extends State<AutomationPage>
                             isExpanded: true,
                             decoration: InputDecoration(
                               labelText: '模型',
-                              hintText: _loadingModels
-                                  ? '正在获取模型…'
-                                  : '填写地址和密钥后自动获取',
+                              hintText: '填写地址和密钥后自动获取',
                               prefixIcon: const Icon(Icons.memory_outlined),
-                              suffixIcon: _loadingModels
-                                  ? const Padding(
-                                      padding: EdgeInsets.all(14),
-                                      child: SizedBox.square(
-                                        dimension: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
+                              suffixIcon: IconButton(
+                                tooltip: '刷新模型列表',
+                                onPressed:
+                                    _disabled ||
+                                        _waitingForModels ||
+                                        settings.baseUrl.isEmpty ||
+                                        settings.apiKey.isEmpty
+                                    ? null
+                                    : () => setState(
+                                        () => _scheduleModels(immediate: true),
                                       ),
-                                    )
-                                  : IconButton(
-                                      tooltip: '刷新模型列表',
-                                      onPressed:
-                                          _disabled ||
-                                              settings.baseUrl.isEmpty ||
-                                              settings.apiKey.isEmpty
-                                          ? null
-                                          : () => setState(
-                                              () => _scheduleModels(
-                                                immediate: true,
-                                              ),
-                                            ),
-                                      icon: const Icon(Icons.refresh),
-                                    ),
+                                icon: const Icon(Icons.refresh),
+                              ),
                             ),
                             items: _models
                                 .map(
@@ -981,29 +997,14 @@ class _AutomationPageState extends State<AutomationPage>
                                     if (model != null) {
                                       _edit(() {
                                         settings.model = model;
-                                        _defaultModelSelected = false;
                                       });
                                     }
                                   },
                           ),
                           Padding(
                             padding: const EdgeInsets.only(top: 6),
-                            child: SettingDescription(
-                              _defaultModelSelected
-                                  ? '已选择首个模型，可切换'
-                                  : '从服务商获取，点击刷新重新加载',
-                            ),
+                            child: const SettingDescription('从服务商获取，点击刷新重新加载'),
                           ),
-                          if (_modelsError != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                _modelsError!,
-                                style: TextStyle(
-                                  color: Theme.of(context).colorScheme.error,
-                                ),
-                              ),
-                            ),
                           const SizedBox(height: 16),
                           _input(
                             'prompt',
