@@ -62,6 +62,11 @@ void main() {
   test('desktop manifest with invalid signature never passes', () async {
     final directory = await Directory.systemTemp.createTemp('ykt-integrity-');
     addTearDown(() => directory.delete(recursive: true));
+    // Use a real public key and a noncanonical signature. All-zero test keys
+    // are low-order points and do not model the production signing key.
+    final algorithm = Ed25519();
+    final keyPair = await algorithm.newKeyPair();
+    final publicKey = await keyPair.extractPublicKey();
     final payload = jsonEncode({
       'schema': 1,
       'app': 'ykt_helper',
@@ -75,13 +80,13 @@ void main() {
     await File('${directory.path}/integrity.json').writeAsString(
       jsonEncode({
         'payload': base64Encode(utf8.encode(payload)),
-        'signature': base64Encode(List.filled(64, 0)),
+        'signature': base64Encode(List.filled(64, 0xff)),
       }),
     );
     final result = await IntegrityService(
       platform: 'windows',
       rootPath: directory.path,
-      publicKey: List.filled(32, 0),
+      publicKey: publicKey.bytes,
     ).check();
     expect(result.verified, isFalse);
     expect(result.detail, '无法验证为官方发布版本');

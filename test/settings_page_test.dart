@@ -8,6 +8,7 @@ import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/services/ai_answer.dart';
+import 'package:ykt_helper/services/app_autostart.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 import 'package:ykt_helper/ui/permissions_page.dart';
 import 'package:ykt_helper/ui/settings_page.dart';
@@ -28,6 +29,34 @@ class _Background extends BackgroundRuntime {
   bool get enabled => true;
   @override
   Future<bool> setEnabled(bool enabled) async => true;
+}
+
+class _Autostart extends AppAutostart {
+  String permission = 'granted';
+  Object? error;
+  Completer<String>? pending;
+  int checks = 0, preparations = 0, configurations = 0;
+
+  @override
+  Future<String> permissionStatus() async {
+    checks++;
+    if (pending != null) return pending!.future;
+    if (error != null) throw error!;
+    return permission;
+  }
+
+  @override
+  Future<void> prepare() async {
+    preparations++;
+  }
+
+  @override
+  Future<void> configure({
+    required bool enabled,
+    required bool eligible,
+  }) async {
+    configurations++;
+  }
 }
 
 class _ModelRequest {
@@ -54,11 +83,12 @@ class _Controller extends AppController {
   int backgroundRetries = 0;
   AppSettings? saved;
   Completer<void>? pendingSave;
-  _Controller(_Ai ai)
+  _Controller(_Ai ai, {AppAutostart? autostart})
     : super(
         ai: ai,
         store: _Store(),
         background: _Background(),
+        autostart: autostart ?? _Autostart(),
         startTimers: false,
         connectSockets: false,
       ) {
@@ -119,6 +149,20 @@ Future<void> _close(WidgetTester tester, _Controller controller) async {
   await tester.binding.setSurfaceSize(null);
 }
 
+Finder _setting(String key) => find.byKey(ValueKey(key));
+
+Finder _switch(String key) =>
+    find.descendant(of: _setting(key), matching: find.byType(Switch));
+
+State _switchState(WidgetTester tester, String key) => tester.state(
+  find
+      .descendant(
+        of: _switch(key),
+        matching: find.byWidgetPredicate((widget) => widget is StatefulWidget),
+      )
+      .first,
+);
+
 void main() {
   testWidgets('应用自启动跟随服务开关，确认后仅保存草稿', (tester) async {
     final controller = _Controller(_Ai());
@@ -126,10 +170,11 @@ void main() {
     final appStart = find.widgetWithText(SwitchListTile, '应用自启动');
     final autoStart = find.widgetWithText(SwitchListTile, '自动启动服务');
     final autoEnter = find.widgetWithText(SwitchListTile, '自动签到');
-    expect(appStart, findsNothing);
+    expect(appStart, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(appStart).onChanged, isNull);
     await tester.tap(autoEnter);
     await tester.pump();
-    expect(appStart, findsNothing);
+    expect(tester.widget<SwitchListTile>(appStart).onChanged, isNull);
     await tester.tap(autoStart);
     await tester.pump();
     expect(appStart, findsOneWidget);
@@ -156,14 +201,16 @@ void main() {
     expect(controller.saved!.appAutoStart, isTrue);
     await tester.tap(autoStart);
     await tester.pump();
-    expect(appStart, findsNothing);
+    expect(appStart, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(appStart).value, isFalse);
+    expect(tester.widget<SwitchListTile>(appStart).onChanged, isNull);
     await tester.tap(find.text('保存设置'));
     await tester.pumpAndSettle();
     expect(controller.saved!.appAutoStart, isFalse);
     await _close(tester, controller);
   });
 
-  testWidgets('Windows服务以完成状态显示，应用自启动在启用自动化后出现', (tester) async {
+  testWidgets('Windows服务以完成状态显示，应用自启动保持可见', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final controller = _Controller(_Ai());
@@ -171,7 +218,11 @@ void main() {
     expect(find.widgetWithText(SwitchListTile, '自动启动服务'), findsNothing);
     expect(find.byIcon(Icons.check_circle_outline_rounded), findsOneWidget);
     expect(find.text('自动化随应用运行，无需单独启动服务'), findsOneWidget);
-    expect(find.widgetWithText(SwitchListTile, '应用自启动'), findsNothing);
+    expect(find.widgetWithText(SwitchListTile, '应用自启动'), findsOneWidget);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
     await tester.tap(find.text('自动签到'));
     await tester.pump();
     expect(find.widgetWithText(SwitchListTile, '应用自启动'), findsOneWidget);
@@ -182,6 +233,251 @@ void main() {
     );
     expect(find.byType(Switch), findsNothing);
     expect(find.byIcon(Icons.check_circle_outline_rounded), findsOneWidget);
+    await _close(tester, controller);
+  });
+
+  for (final permission in [
+    'pending',
+    'denied',
+    'needsConfirmation',
+    'error',
+  ]) {
+    testWidgets('Windows自启动权限$permission时禁止开启并提供权限入口', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final autostart = _Autostart()..permission = permission;
+      if (permission == 'pending') autostart.pending = Completer<String>();
+      if (permission == 'error') autostart.error = StateError('unavailable');
+      final controller = _Controller(_Ai(), autostart: autostart)
+        ..settings = AppSettings(autoEnter: true);
+      await _show(tester, controller);
+      await tester.pump();
+      final tile = tester.widget<SwitchListTile>(_setting('app-auto-start'));
+      expect(tile.value, isFalse);
+      expect(tile.onChanged, isNull);
+      expect(_setting('app-auto-start-permissions'), findsOneWidget);
+      if (permission == 'pending') {
+        expect(find.text('正在检查自启动权限'), findsOneWidget);
+      } else if (permission == 'error') {
+        expect(find.text('无法读取权限，请在应用权限中重试'), findsOneWidget);
+      } else {
+        expect(find.text('请先在应用权限中允许自启动'), findsOneWidget);
+      }
+      await tester.tap(_setting('app-auto-start'));
+      await tester.pump();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(autostart.preparations, 0);
+      expect(autostart.configurations, 0);
+      expect(controller.settings.appAutoStart, isFalse);
+      await _close(tester, controller);
+      autostart.pending?.complete('granted');
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Windows开启前重新读取权限，不沿用进入页面时的授权结果', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final autostart = _Autostart();
+    final controller = _Controller(_Ai(), autostart: autostart)
+      ..settings = AppSettings(autoEnter: true);
+    await _show(tester, controller);
+    await tester.pump();
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNotNull,
+    );
+    expect(autostart.checks, 1);
+    autostart.permission = 'denied';
+    await tester.tap(_setting('app-auto-start'));
+    await tester.pumpAndSettle();
+    expect(autostart.checks, 2);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).value,
+      isFalse,
+    );
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
+    expect(autostart.preparations, 0);
+    expect(autostart.configurations, 0);
+    await _close(tester, controller);
+  });
+
+  testWidgets('Windows确认开启时再次检查权限，已撤销时不保存开启草稿', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final autostart = _Autostart();
+    final controller = _Controller(_Ai(), autostart: autostart)
+      ..settings = AppSettings(autoEnter: true);
+    await _show(tester, controller);
+    await tester.pump();
+    await tester.tap(_setting('app-auto-start'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(autostart.checks, 2);
+    autostart.permission = 'denied';
+    await tester.tap(find.text('开启'));
+    await tester.pumpAndSettle();
+    expect(autostart.checks, 3);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).value,
+      isFalse,
+    );
+    expect(_setting('app-auto-start-clear'), findsNothing);
+    expect(autostart.preparations, 0);
+    await _close(tester, controller);
+  });
+
+  testWidgets('Windows已授权才可开启草稿，保存前撤销权限仍会阻止生效', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final autostart = _Autostart();
+    final controller = _Controller(_Ai(), autostart: autostart)
+      ..settings = AppSettings(autoEnter: true);
+    await _show(tester, controller);
+    await tester.pump();
+    await tester.tap(_setting('app-auto-start'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开启'));
+    await tester.pumpAndSettle();
+    expect(autostart.checks, 3);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).value,
+      isTrue,
+    );
+    expect(controller.settings.appAutoStart, isFalse);
+    expect(controller.saves, 0);
+    autostart.permission = 'denied';
+    await tester.tap(find.text('保存设置'));
+    await tester.pumpAndSettle();
+    expect(autostart.checks, 4);
+    expect(controller.saves, 0);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).value,
+      isFalse,
+    );
+    expect(_setting('app-auto-start-clear'), findsOneWidget);
+    expect(autostart.preparations, 0);
+    expect(autostart.configurations, 0);
+    await _close(tester, controller);
+  });
+
+  testWidgets('Windows恢复前台刷新权限，撤销后显示关闭并允许清除旧偏好', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final autostart = _Autostart();
+    final controller = _Controller(_Ai(), autostart: autostart)
+      ..settings = AppSettings(autoEnter: true, appAutoStart: true);
+    await _show(tester, controller);
+    await tester.pump();
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).value,
+      isTrue,
+    );
+    final gate = Completer<String>();
+    autostart.pending = gate;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).value,
+      isFalse,
+    );
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
+    gate.complete('denied');
+    await tester.pumpAndSettle();
+    expect(autostart.checks, 2);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).value,
+      isFalse,
+    );
+    expect(controller.settings.appAutoStart, isTrue);
+    await tester.tap(_setting('app-auto-start-clear'));
+    await tester.pump();
+    expect(_setting('app-auto-start-clear'), findsNothing);
+    await tester.tap(find.text('保存设置'));
+    await tester.pumpAndSettle();
+    expect(controller.saved!.appAutoStart, isFalse);
+    expect(autostart.preparations, 0);
+    expect(autostart.configurations, 0);
+    await _close(tester, controller);
+  });
+
+  testWidgets('Windows权限页入口只导航，返回后重新检查授权状态', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final nativeCalls = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      AppAutostart.channel,
+      (call) async {
+        nativeCalls.add(call.method);
+        if (call.method == 'status') {
+          return {'enabled': false, 'permission': 'denied'};
+        }
+        throw PlatformException(code: 'unexpected_call');
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        AppAutostart.channel,
+        null,
+      ),
+    );
+    final autostart = _Autostart()..permission = 'denied';
+    final controller = _Controller(_Ai(), autostart: autostart)
+      ..settings = AppSettings(autoEnter: true);
+    await _show(tester, controller);
+    await tester.pump();
+    await tester.tap(_setting('app-auto-start-permissions'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PermissionsPage), findsOneWidget);
+    expect(nativeCalls, ['status']);
+    expect(autostart.preparations, 0);
+    autostart.permission = 'granted';
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(autostart.checks, 2);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNotNull,
+    );
+    expect(nativeCalls, ['status']);
+    expect(autostart.preparations, 0);
+    await _close(tester, controller);
+  });
+
+  testWidgets('Windows迟到的权限结果不会覆盖恢复前台后的检查结果', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final first = Completer<String>(), second = Completer<String>();
+    final autostart = _Autostart()..pending = first;
+    final controller = _Controller(_Ai(), autostart: autostart)
+      ..settings = AppSettings(autoEnter: true);
+    await _show(tester, controller);
+    autostart.pending = second;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    second.complete('denied');
+    await tester.pump();
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
+    first.complete('granted');
+    await tester.pump();
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
+    expect(find.text('请先在应用权限中允许自启动'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await _close(tester, controller);
   });
 
@@ -312,6 +608,127 @@ void main() {
     await tester.tap(autoAnswer);
     await tester.pump();
     expect(tester.widget<SwitchListTile>(autoStart).onChanged, isNotNull);
+    await _close(tester, controller);
+  });
+
+  testWidgets('切换动画期间固定开关行保留各自状态和位置', (tester) async {
+    final controller = _Controller(_Ai());
+    await _show(tester, controller);
+    const keys = [
+      'auto-start-service',
+      'app-auto-start',
+      'auto-enter',
+      'auto-answer',
+    ];
+    final states = {for (final key in keys) key: _switchState(tester, key)};
+    final rectangles = {
+      for (final key in keys) key: tester.getRect(_setting(key)),
+    };
+
+    void checkFixedRows() {
+      for (final key in keys) {
+        expect(_switchState(tester, key), same(states[key]), reason: key);
+        expect(tester.getRect(_setting(key)), rectangles[key], reason: key);
+      }
+      for (var i = 0; i < keys.length - 1; i++) {
+        expect(
+          tester.getBottomLeft(_setting(keys[i])).dy,
+          lessThanOrEqualTo(tester.getTopLeft(_setting(keys[i + 1])).dy),
+        );
+      }
+    }
+
+    await tester.tap(_setting('auto-enter'));
+    await tester.pump(const Duration(milliseconds: 20));
+    checkFixedRows();
+    expect(tester.widget<Switch>(_switch('auto-enter')).value, isTrue);
+    expect(tester.widget<Switch>(_switch('app-auto-start')).value, isFalse);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
+    await tester.tap(_setting('auto-start-service'));
+    await tester.pump(const Duration(milliseconds: 20));
+    checkFixedRows();
+    expect(tester.widget<Switch>(_switch('auto-start-service')).value, isTrue);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNotNull,
+    );
+    await tester.tap(_setting('auto-answer'));
+    await tester.pump(const Duration(milliseconds: 20));
+    checkFixedRows();
+    expect(tester.widget<Switch>(_switch('auto-answer')).value, isTrue);
+    expect(tester.widget<Switch>(_switch('auto-submit')).value, isFalse);
+    final submitState = _switchState(tester, 'auto-submit');
+    await tester.tap(_setting('auto-submit'));
+    await tester.pump(const Duration(milliseconds: 20));
+    checkFixedRows();
+    expect(_switchState(tester, 'auto-submit'), same(submitState));
+    expect(tester.widget<Switch>(_switch('auto-submit')).value, isTrue);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('field-submitDelay')))
+          .controller!
+          .text,
+      '30',
+    );
+    await tester.tap(_setting('auto-answer'));
+    await tester.pump(const Duration(milliseconds: 20));
+    checkFixedRows();
+    expect(_setting('auto-submit'), findsNothing);
+    await tester.tap(_setting('auto-answer'));
+    await tester.pump(const Duration(milliseconds: 20));
+    checkFixedRows();
+    expect(tester.widget<Switch>(_switch('auto-submit')).value, isTrue);
+    await tester.tap(_setting('auto-start-service'));
+    await tester.pump(const Duration(milliseconds: 20));
+    checkFixedRows();
+    expect(tester.widget<Switch>(_switch('app-auto-start')).value, isFalse);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+    await _close(tester, controller);
+  });
+
+  testWidgets('切换答题方式时输入状态不会被另一类字段复用', (tester) async {
+    final controller = _Controller(_Ai())
+      ..settings = AppSettings(autoAnswer: true);
+    await _show(tester, controller);
+    final fixedInput = find.byKey(const ValueKey('field-fixedSingle'));
+    await _reveal(tester, fixedInput);
+    await tester.enterText(fixedInput, 'C');
+    final fixedState = tester.state(fixedInput);
+    final fixedController = tester.widget<TextField>(fixedInput).controller;
+    await _reveal(tester, find.text('自定义 AI'));
+    await tester.tap(find.text('自定义 AI'));
+    await tester.pump(const Duration(milliseconds: 20));
+    final baseInput = find.byKey(const ValueKey('field-baseUrl'));
+    final keyInput = find.byKey(const ValueKey('field-apiKey'));
+    expect(fixedInput, findsNothing);
+    expect(tester.state(baseInput), isNot(same(fixedState)));
+    expect(
+      tester.widget<TextField>(baseInput).controller,
+      isNot(same(fixedController)),
+    );
+    expect(tester.widget<TextField>(baseInput).controller!.text, isEmpty);
+    expect(tester.widget<TextField>(baseInput).obscureText, isFalse);
+    expect(tester.widget<TextField>(keyInput).obscureText, isTrue);
+    final baseState = tester.state(baseInput);
+    await tester.enterText(baseInput, 'https://ai.example.com/v1');
+    await tester.tap(find.text('固定内容'));
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(baseInput, findsNothing);
+    expect(tester.state(fixedInput), isNot(same(baseState)));
+    expect(
+      tester.widget<TextField>(fixedInput).controller,
+      same(fixedController),
+    );
+    expect(tester.widget<TextField>(fixedInput).controller!.text, 'C');
+    expect(tester.widget<TextField>(fixedInput).obscureText, isFalse);
+    expect(tester.takeException(), isNull);
     await _close(tester, controller);
   });
 

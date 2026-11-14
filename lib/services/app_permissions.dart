@@ -114,8 +114,11 @@ class AppPermissions {
     if (!kIsWeb &&
         defaultTargetPlatform == TargetPlatform.windows &&
         permission == AppPermission.autostart) {
+      const autostart = AppAutostart();
+      await autostart.prepare();
+      if (await autostart.permissionStatus() == 'granted') return true;
       await openSettings(permission);
-      return false;
+      return await autostart.permissionStatus() == 'granted';
     }
     if (!_supported) throw const ApiFailure('当前平台暂不支持申请应用权限');
     try {

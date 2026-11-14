@@ -46,6 +46,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   const bool background_start = std::find(command_line_arguments.begin(),
       command_line_arguments.end(), "--background-auto-start") != command_line_arguments.end();
 
+  // A visible startup item is only authorization. Saved app settings must also
+  // permit background work; an off switch never creates a hidden Flutter app.
+  if (background_start && !ShouldRunBackgroundAutostart()) {
+    ::CoUninitialize();
+    return EXIT_SUCCESS;
+  }
+  if (!background_start) RefreshPreparedStartupCommand();
+
   // All entry paths share the same automation owner. A normal launch restores
   // the already running background window instead of sending answers twice.
   const auto instance_name = UserInstanceName();

@@ -11,4 +11,7 @@
 std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
 RegisterAutostartChannel(flutter::FlutterEngine* engine, HWND window);
 
+bool ShouldRunBackgroundAutostart();
+void RefreshPreparedStartupCommand();
+
 #endif

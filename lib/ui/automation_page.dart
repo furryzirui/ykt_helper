@@ -8,6 +8,7 @@ import '../app/app_controller.dart';
 import '../domain/models.dart';
 import '../services/ai_answer.dart';
 import '../services/app_logs.dart';
+import 'permissions_page.dart';
 import 'settings_widgets.dart';
 import 'widgets.dart';
 
@@ -28,7 +29,8 @@ class AutomationPage extends StatefulWidget {
   State<AutomationPage> createState() => _AutomationPageState();
 }
 
-class _AutomationPageState extends State<AutomationPage> {
+class _AutomationPageState extends State<AutomationPage>
+    with WidgetsBindingObserver {
   final _fields = <String, TextEditingController>{};
   bool _saving = false, _seenInitialized = false;
   AppSettings? _draft, _source;
@@ -37,6 +39,13 @@ class _AutomationPageState extends State<AutomationPage> {
   bool _loadingModels = false, _defaultModelSelected = false;
   List<String> _models = [];
   String? _modelsError, _loadedBaseUrl, _loadedApiKey;
+  String? _autostartPermission;
+  bool _checkingAutostartPermission = false;
+  bool _autostartPermissionFailed = false;
+  int _autostartPermissionGeneration = 0;
+  bool get _windows => defaultTargetPlatform == TargetPlatform.windows;
+  bool get _windowsAutostartAllowed =>
+      !_checkingAutostartPermission && _autostartPermission == 'granted';
   bool get _disabled => _saving || !widget.controller.initialized;
   bool get _modelsReady =>
       !_loadingModels &&
@@ -53,6 +62,62 @@ class _AutomationPageState extends State<AutomationPage> {
       _draft = cached!.settings;
       _source = cached.source;
     }
+    WidgetsBinding.instance.addObserver(this);
+    if (_windows) unawaited(_refreshAutostartPermission());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_windows && state == AppLifecycleState.resumed) {
+      unawaited(_refreshAutostartPermission());
+    }
+  }
+
+  Future<bool> _refreshAutostartPermission() async {
+    if (!_windows) return true;
+    final generation = ++_autostartPermissionGeneration;
+    setState(() {
+      _checkingAutostartPermission = true;
+      _autostartPermissionFailed = false;
+    });
+    String? permission;
+    var failed = false;
+    try {
+      permission = await widget.controller.autostart.permissionStatus();
+    } catch (_) {
+      failed = true;
+    }
+    if (!mounted || generation != _autostartPermissionGeneration) return false;
+    setState(() {
+      _checkingAutostartPermission = false;
+      _autostartPermission = permission;
+      _autostartPermissionFailed = failed;
+    });
+    return _windowsAutostartAllowed;
+  }
+
+  String get _windowsAutostartDescription {
+    if (_checkingAutostartPermission) return '正在检查自启动权限';
+    if (_autostartPermissionFailed) return '无法读取权限，请在应用权限中重试';
+    if (!_windowsAutostartAllowed) return '请先在应用权限中允许自启动';
+    return '登录 Windows 后在后台启动自动化';
+  }
+
+  Future<void> _openAutostartPermissions() async {
+    await Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute(builder: (_) => const PermissionsPage()));
+    if (mounted) await _refreshAutostartPermission();
+  }
+
+  Future<bool> _confirmAutostartPermission() async {
+    if (await _refreshAutostartPermission()) return true;
+    if (mounted) {
+      _showError(
+        _autostartPermissionFailed ? '无法读取自启动权限，请在应用权限中重试' : '请先在应用权限中允许自启动',
+      );
+    }
+    return false;
   }
 
   void _readSettings(AppSettings source) {
@@ -168,7 +233,9 @@ class _AutomationPageState extends State<AutomationPage> {
       setState(() => _draft!.appAutoStart = false);
       return;
     }
-    final windows = defaultTargetPlatform == TargetPlatform.windows;
+    final windows = _windows;
+    if (windows && !await _confirmAutostartPermission()) return;
+    if (!mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -191,12 +258,16 @@ class _AutomationPageState extends State<AutomationPage> {
       ),
     );
     if (confirmed == true && mounted) {
+      if (windows && !await _confirmAutostartPermission()) return;
+      if (!mounted) return;
       setState(() => _draft!.appAutoStart = true);
     }
   }
 
   @override
   void dispose() {
+    _autostartPermissionGeneration++;
+    WidgetsBinding.instance.removeObserver(this);
     widget.draft?.settings = _draft;
     widget.draft?.source = _source;
     _modelDebounce?.cancel();
@@ -216,6 +287,12 @@ class _AutomationPageState extends State<AutomationPage> {
       _showError('提交延迟请输入 1–3600 秒');
       return false;
     }
+    if (_windows &&
+        _draft!.appAutoStart &&
+        !await _confirmAutostartPermission()) {
+      return false;
+    }
+    if (!mounted) return false;
     if (_draft!.autoAnswer &&
         _draft!.answerMode == AnswerMode.ai &&
         !_modelsReady) {
@@ -251,11 +328,13 @@ class _AutomationPageState extends State<AutomationPage> {
     String? helper,
     IconData? icon,
   }) => Padding(
+    key: ValueKey('input-$name'),
     padding: const EdgeInsets.only(bottom: 14),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         TextField(
+          key: ValueKey('field-$name'),
           enabled: !_disabled,
           controller: _field(name, value),
           obscureText: secret,
@@ -293,11 +372,9 @@ class _AutomationPageState extends State<AutomationPage> {
       }
       _seenInitialized = c.initialized;
       final settings = _draft!;
-      final windows = defaultTargetPlatform == TargetPlatform.windows;
+      final windows = _windows;
       final hasAutomation = settings.autoEnter || settings.autoAnswer;
-      final showAppAutoStart =
-          c.systemServiceSupported && settings.autoStartService ||
-          windows && hasAutomation;
+      final showAppAutoStart = c.systemServiceSupported || windows;
       return Scaffold(
         appBar: AppBar(title: const Text('自动化')),
         body: SettingsList(
@@ -310,6 +387,7 @@ class _AutomationPageState extends State<AutomationPage> {
                   children: [
                     if (c.systemServiceSupported)
                       SwitchListTile(
+                        key: const ValueKey('auto-start-service'),
                         contentPadding: const EdgeInsets.symmetric(vertical: 4),
                         secondary: _settingIcon(
                           Icons.power_settings_new_rounded,
@@ -329,6 +407,7 @@ class _AutomationPageState extends State<AutomationPage> {
                       )
                     else
                       ListTile(
+                        key: const ValueKey('auto-start-service'),
                         contentPadding: const EdgeInsets.symmetric(vertical: 4),
                         leading: _settingIcon(Icons.power_settings_new_rounded),
                         title: const Text('自动启动服务'),
@@ -345,20 +424,65 @@ class _AutomationPageState extends State<AutomationPage> {
                     if (showAppAutoStart) ...[
                       const Divider(height: 1),
                       SwitchListTile(
+                        key: const ValueKey('app-auto-start'),
                         contentPadding: const EdgeInsets.symmetric(vertical: 4),
                         secondary: _settingIcon(Icons.restart_alt_rounded),
                         title: const Text('应用自启动'),
                         subtitle: SettingDescription(
                           windows
-                              ? '登录 Windows 后在后台启动自动化'
+                              ? _windowsAutostartDescription
                               : '开机后恢复自动化，需在系统中允许自启动',
                         ),
-                        value: settings.appAutoStart,
-                        onChanged: _disabled ? null : _setAppAutoStart,
+                        value:
+                            settings.appAutoStart &&
+                            (!windows || _windowsAutostartAllowed),
+                        onChanged:
+                            _disabled ||
+                                !hasAutomation ||
+                                windows && !_windowsAutostartAllowed ||
+                                c.systemServiceSupported &&
+                                    !settings.autoStartService
+                            ? null
+                            : _setAppAutoStart,
                       ),
+                      if (windows && !_windowsAutostartAllowed)
+                        Padding(
+                          key: const ValueKey(
+                            'app-auto-start-permission-actions',
+                          ),
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Wrap(
+                            spacing: 8,
+                            children: [
+                              TextButton.icon(
+                                key: const ValueKey(
+                                  'app-auto-start-permissions',
+                                ),
+                                onPressed: _saving
+                                    ? null
+                                    : _openAutostartPermissions,
+                                icon: const Icon(
+                                  Icons.admin_panel_settings_outlined,
+                                ),
+                                label: const Text('应用权限'),
+                              ),
+                              if (settings.appAutoStart)
+                                TextButton(
+                                  key: const ValueKey('app-auto-start-clear'),
+                                  onPressed: _saving
+                                      ? null
+                                      : () => setState(
+                                          () => settings.appAutoStart = false,
+                                        ),
+                                  child: const Text('清除自启动设置'),
+                                ),
+                            ],
+                          ),
+                        ),
                     ],
                     const Divider(height: 1),
                     SwitchListTile(
+                      key: const ValueKey('auto-enter'),
                       contentPadding: const EdgeInsets.symmetric(vertical: 4),
                       secondary: _settingIcon(Icons.how_to_reg_outlined),
                       title: const Text('自动签到'),
@@ -379,6 +503,7 @@ class _AutomationPageState extends State<AutomationPage> {
                     ),
                     const Divider(height: 1),
                     SwitchListTile(
+                      key: const ValueKey('auto-answer'),
                       contentPadding: const EdgeInsets.symmetric(vertical: 4),
                       secondary: _settingIcon(Icons.auto_awesome_outlined),
                       title: const Text('自动答题'),
@@ -424,6 +549,7 @@ class _AutomationPageState extends State<AutomationPage> {
                     if (settings.autoAnswer) ...[
                       const Divider(height: 1),
                       SwitchListTile(
+                        key: const ValueKey('auto-submit'),
                         contentPadding: const EdgeInsets.symmetric(vertical: 4),
                         secondary: _settingIcon(Icons.send_outlined),
                         title: const Text('自动提交'),
@@ -436,8 +562,10 @@ class _AutomationPageState extends State<AutomationPage> {
                       ),
                       if (settings.autoSubmit)
                         Padding(
+                          key: const ValueKey('input-submitDelay'),
                           padding: const EdgeInsets.only(top: 8, bottom: 8),
                           child: TextField(
+                            key: const ValueKey('field-submitDelay'),
                             enabled: !_disabled,
                             controller: _field(
                               'submitDelay',
@@ -463,6 +591,7 @@ class _AutomationPageState extends State<AutomationPage> {
                         ),
                       const SizedBox(height: 8),
                       SegmentedButton<AnswerMode>(
+                        key: const ValueKey('answer-mode'),
                         segments: const [
                           ButtonSegment(
                             value: AnswerMode.fixed,
@@ -634,6 +763,7 @@ class _AutomationPageState extends State<AutomationPage> {
                           icon: Icons.edit_note_outlined,
                         ),
                         DropdownButtonFormField<SlideScope>(
+                          key: const ValueKey('slide-scope'),
                           initialValue: settings.slideScope,
                           isExpanded: true,
                           decoration: const InputDecoration(

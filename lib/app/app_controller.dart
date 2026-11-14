@@ -438,6 +438,12 @@ class AppController extends ChangeNotifier {
         }
       }
     }
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.windows &&
+        candidate.appAutoStart &&
+        await autostart.permissionStatus() != 'granted') {
+      throw const ApiFailure('请先在应用权限中允许自启动');
+    }
     final previous = settings;
     await _write('settings', jsonEncode(candidate.toJson()));
     try {

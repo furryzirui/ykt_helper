@@ -16,6 +16,21 @@ class AppAutostart {
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.windows);
 
+  /// Registers a visible Windows startup item only after explicit UI consent.
+  /// This prepares authorization; configure() separately enables actual work.
+  Future<void> prepare() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.windows) {
+      throw const ApiFailure('当前平台不支持此自启动授权方式');
+    }
+    try {
+      await channel.invokeMethod<void>('prepare');
+    } on PlatformException catch (error) {
+      throw ApiFailure(error.message ?? '无法添加 Windows 启动项');
+    } on MissingPluginException {
+      throw const ApiFailure('当前平台无法配置应用自启动');
+    }
+  }
+
   /// Called after saved settings or login state changes. Never requests a
   /// permission, shows a window or launches the service itself.
   Future<void> configure({

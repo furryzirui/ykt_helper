@@ -17,6 +17,9 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - name: Test Windows startup authorization
+        shell: pwsh
+        run: ./scripts/windows/test_autostart.ps1
       - run: flutter build windows --release
       - uses: actions/setup-python@v5
         with:

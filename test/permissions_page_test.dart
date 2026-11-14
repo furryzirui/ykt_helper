@@ -83,6 +83,55 @@ Future<void> _gate(
 }
 
 void main() {
+  testWidgets('Windows 自启动先解释注册原因，确认后准备启动项且不启用自动化', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final permissions = _Permissions()..grantRequest = true;
+    permissions.states[AppPermission.autostart] = PermissionStatus.denied;
+    await _show(tester, permissions);
+    await tester.ensureVisible(_row('自启动'));
+    await tester.tap(_row('自启动'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('为当前用户添加 ykt_helper 启动项'), findsOneWidget);
+    expect(find.textContaining('仅授权不会启动自动化'), findsOneWidget);
+    expect(permissions.requested, isEmpty);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(permissions.requested, isEmpty);
+    await tester.tap(_row('自启动'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('继续授权'));
+    await tester.pumpAndSettle();
+    expect(permissions.requested, [AppPermission.autostart]);
+    expect(permissions.opened, isEmpty);
+    expect(
+      find.descendant(of: _row('自启动'), matching: find.text('已允许')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Windows 未知自启动权限也经确认注册并重新核验', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final permissions = _Permissions()..grantRequest = true;
+    bool? result;
+    await _gate(
+      tester,
+      permissions,
+      AppPermission.autostart,
+      (value) => result = value,
+    );
+    await tester.tap(find.text('执行操作'));
+    await tester.pumpAndSettle();
+    expect(permissions.requested, isEmpty);
+    expect(find.textContaining('无需管理员权限'), findsOneWidget);
+    await tester.tap(find.text('继续授权'));
+    await tester.pumpAndSettle();
+    expect(permissions.requested, [AppPermission.autostart]);
+    expect(permissions.opened, isEmpty);
+    expect(result, true);
+  });
+
   testWidgets('厂商自启动状态需人工确认，跳转前解释且不假设已授权', (tester) async {
     final permissions = _Permissions();
     await _show(tester, permissions);

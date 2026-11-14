@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/rain_api.dart';
@@ -32,6 +33,9 @@ class _Autostart extends AppAutostart {
   final registrations = <({bool enabled, bool eligible})>[];
   final suspensions = <bool>[];
   int failuresRemaining = 0;
+  String permission = 'granted';
+  Object? permissionError;
+  int permissionChecks = 0;
   Future<void> Function(bool enabled, bool eligible)? beforeConfigure;
   ({bool enabled, bool eligible})? savedRegistration;
 
@@ -39,6 +43,13 @@ class _Autostart extends AppAutostart {
 
   @override
   bool get supported => available;
+
+  @override
+  Future<String> permissionStatus() async {
+    permissionChecks++;
+    if (permissionError != null) throw permissionError!;
+    return permission;
+  }
 
   @override
   Future<void> configure({
@@ -164,7 +175,76 @@ void main() {
   }
 
   setUp(() => controller = create());
-  tearDown(() => controller.dispose());
+  tearDown(() {
+    controller.dispose();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  test(
+    'Windows refuses unverified permission before persistence or registration',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      controller.dispose();
+      controller = create(backgroundAvailable: false)..account = _Api.user;
+      final previous = controller.settings;
+      for (final status in ['denied', 'needsConfirmation', 'unsupported']) {
+        autostart.permission = status;
+        await expectLater(
+          controller.saveSettings(
+            AppSettings(autoEnter: true, appAutoStart: true),
+          ),
+          throwsA(isA<ApiFailure>()),
+        );
+        expect(store.settingsWrites, isEmpty);
+        expect(autostart.registrations, isEmpty);
+        expect(identical(controller.settings, previous), true);
+      }
+      autostart.permissionError = const ApiFailure('无法读取自启动状态');
+      await expectLater(
+        controller.saveSettings(
+          AppSettings(autoEnter: true, appAutoStart: true),
+        ),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(store.settingsWrites, isEmpty);
+      expect(autostart.registrations, isEmpty);
+    },
+  );
+
+  test(
+    'Windows can turn off old preference after permission revocation',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      controller.dispose();
+      controller = create(backgroundAvailable: false)..account = _Api.user;
+      controller.settings = AppSettings(autoEnter: true, appAutoStart: true);
+      autostart.permission = 'denied';
+      await controller.saveSettings(
+        AppSettings(autoEnter: true, appAutoStart: false),
+      );
+      expect(controller.settings.appAutoStart, false);
+      expect(autostart.permissionChecks, 0);
+      expect(autostart.registrations.last.enabled, false);
+    },
+  );
+
+  test(
+    'Android OEM confirmation does not block enabling its configured preference',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      controller.account = _Api.user;
+      autostart.permission = 'needsConfirmation';
+      await controller.saveSettings(
+        AppSettings(
+          autoEnter: true,
+          autoStartService: true,
+          appAutoStart: true,
+        ),
+      );
+      expect(controller.settings.appAutoStart, true);
+      expect(autostart.permissionChecks, 0);
+    },
+  );
 
   test(
     'Android app startup depends on automation and service auto-start',
@@ -200,6 +280,7 @@ void main() {
   test(
     'Windows app startup does not require an Android system service',
     () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       controller.dispose();
       controller = create(backgroundAvailable: false)..account = _Api.user;
       await controller.saveSettings(

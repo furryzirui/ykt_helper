@@ -33,6 +33,32 @@ void main() {
     expect(calls.last.arguments, {'suspended': true});
   });
 
+  test(
+    'Windows prepare registers authorization without enabling work',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      await autostart.prepare();
+      expect(calls.single.method, 'prepare');
+      expect(calls.single.arguments, isNull);
+    },
+  );
+
+  test('prepare is Windows-only and propagates registration errors', () async {
+    for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+      debugDefaultTargetPlatformOverride = platform;
+      await expectLater(autostart.prepare(), throwsA(isA<ApiFailure>()));
+    }
+    expect(calls, isEmpty);
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    messenger.setMockMethodCallHandler(AppAutostart.channel, (_) async {
+      throw PlatformException(code: 'denied', message: '无法添加启动项');
+    });
+    await expectLater(
+      autostart.prepare(),
+      throwsA(isA<ApiFailure>().having((e) => e.message, 'message', '无法添加启动项')),
+    );
+  });
+
   test('iOS does not register startup or call native channels', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     expect(autostart.supported, isFalse);

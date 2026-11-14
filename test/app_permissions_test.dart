@@ -328,14 +328,57 @@ void main() {
     expect(states.last.status, PermissionStatus.needsConfirmation);
   });
 
-  test('Windows autostart settings uses its own native route', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    final methods = <String>[];
-    messenger.setMockMethodCallHandler(AppAutostart.channel, (call) async {
-      methods.add(call.method);
-      return true;
-    });
-    expect(await permissions.request(AppPermission.autostart), isFalse);
-    expect(methods, ['openSettings']);
-  });
+  test(
+    'Windows consent prepares an item before checking its authorization',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final methods = <String>[];
+      messenger.setMockMethodCallHandler(AppAutostart.channel, (call) async {
+        methods.add(call.method);
+        if (call.method == 'status') {
+          return {'enabled': false, 'permission': 'granted'};
+        }
+        return null;
+      });
+      expect(await permissions.request(AppPermission.autostart), isTrue);
+      expect(methods, ['prepare', 'status']);
+    },
+  );
+
+  test(
+    'Windows denial opens the now-discoverable item without bypassing authorization',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      for (final status in ['denied', 'needsConfirmation']) {
+        final methods = <String>[];
+        messenger.setMockMethodCallHandler(AppAutostart.channel, (call) async {
+          methods.add(call.method);
+          if (call.method == 'status') {
+            return {'enabled': false, 'permission': status};
+          }
+          if (call.method == 'openSettings') return true;
+          return null;
+        });
+        expect(await permissions.request(AppPermission.autostart), isFalse);
+        expect(methods, ['prepare', 'status', 'openSettings', 'status']);
+      }
+    },
+  );
+
+  test(
+    'Windows preparation failure neither navigates nor reports success',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final methods = <String>[];
+      messenger.setMockMethodCallHandler(AppAutostart.channel, (call) async {
+        methods.add(call.method);
+        throw PlatformException(code: 'prepare_failed');
+      });
+      await expectLater(
+        permissions.request(AppPermission.autostart),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(methods, ['prepare']);
+    },
+  );
 }

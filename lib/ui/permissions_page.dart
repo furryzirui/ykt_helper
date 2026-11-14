@@ -34,7 +34,9 @@ String _statusText(AppPermission permission, PermissionStatus status) =>
 String _permissionExplanation(AppPermission permission, bool request) {
   if (permission == AppPermission.autostart) {
     return defaultTargetPlatform == TargetPlatform.windows
-        ? '用于登录 Windows 后在后台启动自动化。\n\n将打开系统“启动应用”，找到 ykt_helper 后允许启动。应用内的“应用自启动”需在自动化中开启并保存。'
+        ? request
+              ? '用于登录 Windows 后在后台启动自动化。\n\n确认后，应用会为当前用户添加 ykt_helper 启动项，无需管理员权限。若已被系统禁用，将打开“启动应用”，请找到 ykt_helper 并允许启动。\n\n授权后仍需在自动化中打开“应用自启动”并保存；仅授权不会启动自动化。'
+              : '用于登录 Windows 后在后台启动自动化。\n\n将打开系统“启动应用”，可管理 ykt_helper 的启动权限。应用内“应用自启动”开关另行决定是否在登录后运行。'
         : '用于开机后和系统允许的进程回收后恢复自动化。\n\n将尝试打开系统自启动管理，请找到 ykt_helper 并允许自启动、关联启动或后台启动；若打开的是应用详情，请进入“自启动”或“权限”设置。请同时允许通知并取消电池优化。\n\nAndroid 无法统一读取厂商的自启动授权状态，设置后返回应用即可；强行停止后无法自动恢复。';
   }
   if (defaultTargetPlatform == TargetPlatform.iOS) {
@@ -129,11 +131,26 @@ Future<bool> ensureAppPermission(
       _permissionError(context, '当前平台暂不支持此权限功能');
       return false;
     case PermissionStatus.needsConfirmation:
-      if (!await showPermissionSettingsExplanation(context, permission)) {
+      final prepareWindowsStartup =
+          defaultTargetPlatform == TargetPlatform.windows &&
+          permission == AppPermission.autostart;
+      if (!await showPermissionSettingsExplanation(
+        context,
+        permission,
+        request: prepareWindowsStartup,
+      )) {
         return false;
       }
       if (!context.mounted) return false;
       try {
+        if (prepareWindowsStartup) {
+          if (!await permissions.request(permission)) return false;
+          final states = await permissions.check();
+          return states
+                  .singleWhere((item) => item.permission == permission)
+                  .status ==
+              PermissionStatus.granted;
+        }
         await permissions.openSettings(permission);
       } catch (_) {
         if (context.mounted) _permissionError(context, '无法打开系统设置，请手动检查自启动');
@@ -234,7 +251,11 @@ class _PermissionsPageState extends State<PermissionsPage>
     if (_opening || _checking) return;
     setState(() => _opening = true);
     try {
-      final request = _states?[permission] == PermissionStatus.denied;
+      final request =
+          _states?[permission] == PermissionStatus.denied ||
+          defaultTargetPlatform == TargetPlatform.windows &&
+              permission == AppPermission.autostart &&
+              _states?[permission] == PermissionStatus.needsConfirmation;
       if (!await showPermissionSettingsExplanation(
         context,
         permission,

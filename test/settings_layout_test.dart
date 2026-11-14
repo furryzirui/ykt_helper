@@ -238,6 +238,33 @@ void main() {
         await _mount(tester, AutomationPage(controller: controller));
         await tester.pump(const Duration(milliseconds: 501));
         await tester.pumpAndSettle();
+        const automationKeys = [
+          'auto-start-service',
+          'app-auto-start',
+          'auto-enter',
+          'auto-answer',
+          'auto-submit',
+        ];
+        for (final key in automationKeys) {
+          expect(find.byKey(ValueKey(key)), findsOneWidget);
+        }
+        expect(
+          tester
+              .widget<SwitchListTile>(
+                find.byKey(const ValueKey('app-auto-start')),
+              )
+              .onChanged,
+          isNull,
+        );
+        for (var i = 0; i < automationKeys.length - 1; i++) {
+          final previous = find.byKey(ValueKey(automationKeys[i]));
+          final next = find.byKey(ValueKey(automationKeys[i + 1]));
+          expect(
+            tester.getBottomLeft(previous).dy,
+            lessThanOrEqualTo(tester.getTopLeft(next).dy),
+          );
+          expect(tester.getSize(previous).width, tester.getSize(next).width);
+        }
         for (final tile in tester.widgetList<SwitchListTile>(
           find.byType(SwitchListTile),
         )) {

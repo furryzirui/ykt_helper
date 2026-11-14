@@ -57,3 +57,4 @@ Filename: "{app}\ykt_helper.exe"; Description: "{cm:LaunchProgram,ykt_helper}"; 
 [Registry]
 ; The saved app setting controls startup; installation only registers cleanup.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "ykt_helper"; Flags: dontcreatekey uninsdeletevalue
+Root: HKCU; Subkey: "Software\furryzirui\ykt_helper\Autostart"; Flags: dontcreatekey uninsdeletekey
