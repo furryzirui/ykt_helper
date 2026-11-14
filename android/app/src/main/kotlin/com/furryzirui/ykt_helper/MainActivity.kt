@@ -190,10 +190,10 @@ class MainActivity : FlutterActivity() {
             packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNATURES)
         }
         val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            info.signingInfo.apkContentsSigners.toList()
+            info.signingInfo?.apkContentsSigners?.toList() ?: emptyList()
         } else {
             @Suppress("DEPRECATION")
-            info.signatures.toList()
+            info.signatures?.toList() ?: emptyList()
         }
         val digest = MessageDigest.getInstance("SHA-256")
         return signatures.map { signature ->
