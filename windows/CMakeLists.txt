@@ -57,6 +57,13 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# webview_windows 0.4.0 still uses the C++/WinRT experimental coroutine API.
+# MSVC 14.51 requires this opt-in until the plugin migrates to C++20 coroutines.
+if(MSVC AND TARGET webview_windows_plugin)
+  target_compile_definitions(webview_windows_plugin PRIVATE
+    _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can
