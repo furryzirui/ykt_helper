@@ -10,17 +10,38 @@ class BackgroundRuntime {
   BackgroundRuntime({this.permissions = const AppPermissions()});
 
   bool _enabled = false;
+  int _pendingOperations = 0;
   Future<bool> _operation = Future<bool>.value(true);
 
   bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
   bool get _desktop =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+  /// Whether this platform can keep the Android classroom service running.
+  /// Windows uses its normal desktop process and has no system service switch.
+  bool get supported => _supported;
+  bool get busy => _pendingOperations > 0;
   bool get enabled => (_supported || _desktop) && _enabled;
 
   Future<bool> setEnabled(bool enabled) {
-    _operation = _operation.then((_) => _setEnabled(enabled));
-    return _operation;
+    _pendingOperations++;
+    // A platform plugin may throw an Error rather than an Exception. Recover
+    // the queue so a failed toggle cannot permanently block later retries.
+    final operation = _operation
+        .catchError((_) => false)
+        .then((_) => _setEnabled(enabled));
+    _operation = operation.then(
+      (value) {
+        _pendingOperations--;
+        return value;
+      },
+      onError: (Object _, StackTrace _) {
+        _pendingOperations--;
+        return false;
+      },
+    );
+    return operation;
   }
 
   Future<bool> _setEnabled(bool enabled) async {

@@ -277,12 +277,16 @@ enum SlideScope { none, current, currentAndNext, all }
 const defaultAiPrompt = '请使用最简洁的回答完成这道题：{question}';
 
 class AppSettings {
-  bool autoEnter, autoAnswer, autoSubmit;
+  /// Lets an enabled automation start the service when needed. The direct
+  /// system-service switch is a process-local control in AppController and is
+  /// deliberately not persisted.
+  bool autoStartService, autoEnter, autoAnswer, autoSubmit;
   int autoSubmitDelaySeconds;
   AnswerMode answerMode;
   String fixedAnswer, baseUrl, apiKey, model, customPrompt;
   SlideScope slideScope;
   AppSettings({
+    this.autoStartService = false,
     this.autoEnter = false,
     this.autoAnswer = false,
     this.autoSubmit = false,
@@ -296,6 +300,7 @@ class AppSettings {
     this.slideScope = SlideScope.none,
   });
   factory AppSettings.fromJson(Json json) => AppSettings(
+    autoStartService: truth(json['autoStartService']),
     autoEnter: truth(json['autoEnter']),
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
@@ -318,6 +323,7 @@ class AppSettings {
     ),
   );
   Json toJson() => {
+    'autoStartService': autoStartService,
     'autoEnter': autoEnter,
     'autoAnswer': autoAnswer,
     'autoSubmit': autoSubmit,

@@ -87,6 +87,24 @@ Finder _input(String label) => find.byWidgetPredicate(
   (widget) => widget is TextField && widget.decoration?.labelText == label,
 );
 
+Future<void> _reveal(
+  WidgetTester tester,
+  Finder target, {
+  double delta = 240,
+}) async {
+  if (target.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(
+      target,
+      delta,
+      scrollable: find.byType(Scrollable).first,
+    );
+  } else {
+    await tester.ensureVisible(target);
+  }
+  await tester.pump();
+  expect(target.hitTestable(), findsOneWidget);
+}
+
 Future<void> _show(WidgetTester tester, _Controller controller) async {
   await tester.binding.setSurfaceSize(const Size(800, 1500));
   await tester.pumpWidget(
@@ -101,6 +119,35 @@ Future<void> _close(WidgetTester tester, _Controller controller) async {
 }
 
 void main() {
+  testWidgets('自动启动服务位于顶部，仅在存在自动化项目时可开启', (tester) async {
+    final controller = _Controller(_Ai());
+    await _show(tester, controller);
+    final autoStart = find.widgetWithText(SwitchListTile, '自动启动服务');
+    final autoEnter = find.widgetWithText(SwitchListTile, '自动签到');
+    final autoAnswer = find.widgetWithText(SwitchListTile, '自动答题');
+    expect(
+      tester.getTopLeft(autoStart).dy,
+      lessThan(tester.getTopLeft(autoEnter).dy),
+    );
+    expect(tester.widget<SwitchListTile>(autoStart).onChanged, isNull);
+    expect(tester.widget<SwitchListTile>(autoStart).value, isFalse);
+    await tester.tap(autoEnter);
+    await tester.pump();
+    expect(tester.widget<SwitchListTile>(autoStart).onChanged, isNotNull);
+    await tester.tap(autoStart);
+    await tester.pump();
+    expect(tester.widget<SwitchListTile>(autoStart).value, isTrue);
+    expect(controller.settings.autoStartService, isFalse);
+    await tester.tap(autoEnter);
+    await tester.pump();
+    expect(tester.widget<SwitchListTile>(autoStart).value, isFalse);
+    expect(tester.widget<SwitchListTile>(autoStart).onChanged, isNull);
+    await tester.tap(autoAnswer);
+    await tester.pump();
+    expect(tester.widget<SwitchListTile>(autoStart).onChanged, isNotNull);
+    await _close(tester, controller);
+  });
+
   testWidgets(
     'submission delay appears only when enabled and validates before saving',
     (tester) async {
@@ -115,17 +162,17 @@ void main() {
       expect(tester.widget<TextField>(_input('提交延迟')).controller!.text, '30');
       await tester.enterText(_input('固定答案'), 'A');
       await tester.enterText(_input('提交延迟'), '0');
-      await tester.ensureVisible(find.text('保存设置'));
+      await _reveal(tester, find.text('保存设置'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('保存设置'));
       await tester.pump();
       expect(find.text('提交延迟请输入 1–3600 秒'), findsOneWidget);
       expect(controller.saves, 0);
-      await tester.ensureVisible(_input('提交延迟'));
+      await _reveal(tester, _input('提交延迟'));
       await tester.pumpAndSettle();
       await tester.enterText(_input('提交延迟'), '45');
       expect(controller.settings.autoSubmitDelaySeconds, 30);
-      await tester.ensureVisible(find.text('保存设置'));
+      await _reveal(tester, find.text('保存设置'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('保存设置'));
       await tester.pump();
@@ -143,7 +190,7 @@ void main() {
       await tester.tap(find.text('自动答题'));
       await tester.pump();
       await tester.enterText(_input('固定答案'), 'A');
-      await tester.ensureVisible(find.text('保存设置'));
+      await _reveal(tester, find.text('保存设置'));
       await tester.tap(find.text('保存设置'));
       await tester.pump();
       expect(find.text('保存中…'), findsOneWidget);
@@ -183,7 +230,7 @@ void main() {
       expect(controller.settings.autoAnswer, isFalse);
       expect(controller.settings.autoSubmit, isFalse);
       expect(controller.settings.autoEnter, isFalse);
-      await tester.ensureVisible(find.text('保存设置'));
+      await _reveal(tester, find.text('保存设置'));
       await tester.tap(find.text('保存设置'));
       await tester.pump();
       expect(controller.saved!.autoAnswer, isTrue);
@@ -277,10 +324,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(AboutPage), findsOneWidget);
       expect(find.text('紫锐飞跃'), findsOneWidget);
-      expect(
-        find.text('https://github.com/furryzirui/ykt_helper'),
-        findsOneWidget,
-      );
+      expect(find.text('github.com/furryzirui/ykt_helper'), findsOneWidget);
       await _close(tester, controller);
     },
   );
@@ -312,10 +356,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('vision-b').last);
       await tester.pumpAndSettle();
-      await tester.ensureVisible(_input('提示词'));
+      await _reveal(tester, _input('提示词'));
       await tester.enterText(_input('提示词'), '只输出结果：{question}');
       expect(controller.settings.customPrompt, defaultAiPrompt);
-      await tester.ensureVisible(find.text('保存设置'));
+      await _reveal(tester, find.text('保存设置'));
       await tester.tap(find.text('保存设置'));
       await tester.pump();
       expect(controller.saved!.model, 'vision-b');
@@ -352,7 +396,7 @@ void main() {
       await tester.pump();
       expect(find.text('new-model'), findsOneWidget);
       await tester.enterText(_input('api_key'), 'replacement-key');
-      await tester.ensureVisible(find.text('保存设置'));
+      await _reveal(tester, find.text('保存设置'));
       await tester.tap(find.text('保存设置'));
       await tester.pump();
       expect(controller.saves, 0);
@@ -403,7 +447,7 @@ void main() {
     await tester.pump();
     expect(find.text('chosen-model'), findsOneWidget);
     expect(find.text('已选择首个模型，可切换'), findsNothing);
-    await tester.ensureVisible(find.text('保存设置'));
+    await _reveal(tester, find.text('保存设置'));
     await tester.tap(find.text('保存设置'));
     await tester.pump();
     expect(controller.saved!.model, 'chosen-model');
@@ -435,13 +479,13 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(find.text('current-model'), findsOneWidget);
-      await tester.ensureVisible(find.byTooltip('刷新模型列表'));
+      await _reveal(tester, find.byTooltip('刷新模型列表'));
       await tester.tap(find.byTooltip('刷新模型列表'));
       await tester.pump(const Duration(milliseconds: 1));
       expect(ai.requests, hasLength(3));
       ai.requests[2].response.completeError(const ApiFailure('模型列表获取失败'));
       await tester.pump();
-      await tester.ensureVisible(find.text('保存设置'));
+      await _reveal(tester, find.text('保存设置'));
       await tester.tap(find.text('保存设置'));
       await tester.pump();
       expect(controller.saves, 0);

@@ -7,6 +7,7 @@ import '../app/app_controller.dart';
 import '../domain/models.dart' as domain;
 import '../services/app_permissions.dart';
 import 'live_page.dart';
+import 'login_page.dart';
 import 'permissions_page.dart';
 import 'widgets.dart';
 
@@ -17,48 +18,79 @@ class CoursesPage extends StatelessWidget {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
     builder: (context, _) {
-      if (controller.account == null) return const ContentMessage('请在设置中登录');
+      if (controller.account == null) {
+        return ContentMessage(
+          '未登录',
+          actionLabel: '登录',
+          retry: !controller.initialized
+              ? null
+              : () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => LoginPage(controller: controller),
+                  ),
+                ),
+        );
+      }
       if (controller.courses.isEmpty && !controller.busy) {
         return const ContentMessage('暂无课程');
       }
-      return RefreshIndicator(
-        onRefresh: controller.refresh,
-        child: ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
-          physics: const AlwaysScrollableScrollPhysics(),
-          itemCount: controller.courses.length,
-          itemBuilder: (context, index) {
-            final course = controller.courses[index];
-            return Card(
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
-                ),
-                leading: const TintedIcon(Icons.menu_book_outlined),
-                title: Text(course.name),
-                subtitle: Text(
-                  [
-                    course.classroomName,
-                    course.teacher,
-                    if (course.archived) '已归档',
-                  ].where((text) => text.isNotEmpty).join(' · '),
-                ),
-                trailing: course.liveLessonIds.isNotEmpty
-                    ? const Chip(label: Text('上课中'))
-                    : const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => CourseLessonsPage(
-                      controller: controller,
-                      course: course,
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
+      Widget card(domain.Course course) => Card(
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 8,
+          ),
+          leading: const TintedIcon(Icons.menu_book_outlined),
+          title: Text(course.name),
+          subtitle: Text(
+            [
+              course.classroomName,
+              course.teacher,
+              if (course.archived) '已归档',
+            ].where((text) => text.isNotEmpty).join(' · '),
+          ),
+          trailing: course.liveLessonIds.isNotEmpty
+              ? const Chip(label: Text('上课中'))
+              : const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  CourseLessonsPage(controller: controller, course: course),
+            ),
+          ),
         ),
+      );
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final columns = constraints.maxWidth >= 900 ? 2 : 1;
+          return RefreshIndicator(
+            onRefresh: controller.refresh,
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: (controller.courses.length / columns).ceil(),
+              itemBuilder: (context, row) {
+                if (columns == 1) return card(controller.courses[row]);
+                return IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var column = 0; column < columns; column++) ...[
+                        if (column > 0) const SizedBox(width: 12),
+                        Expanded(
+                          child:
+                              row * columns + column < controller.courses.length
+                              ? card(controller.courses[row * columns + column])
+                              : const SizedBox(),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
+            ),
+          );
+        },
       );
     },
   );
@@ -86,6 +118,7 @@ class _CourseLessonsPageState extends State<CourseLessonsPage> {
   bool _loading = false, _hasMore = true;
   String? _error;
   int _page = 0;
+  domain.Lesson? _selectedLesson;
   @override
   void initState() {
     super.initState();
@@ -230,115 +263,147 @@ class _CourseLessonsPageState extends State<CourseLessonsPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: fullTitleAppBar(context, title: widget.course.name),
-    body: _accountChanged
-        ? const ContentMessage('账号已变更，请返回课程列表')
-        : RefreshIndicator(
-            onRefresh: () => _load(reset: true),
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: [
-                if (widget.course.classroomName.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 2, top: 4, bottom: 12),
-                    child: Text(
-                      widget.course.classroomName,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                for (final lesson in _lessons)
-                  Card(
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 6,
-                      ),
-                      leading: const TintedIcon(Icons.class_outlined),
-                      title: Text(lesson.title),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Wrap(
-                          spacing: 10,
-                          runSpacing: 4,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            if (lesson.startedAt > 0)
-                              Text(formatTime(lesson.startedAt)),
-                            _attendanceLabel(lesson),
-                          ],
-                        ),
-                      ),
-                      trailing: lesson.oldVersion
-                          ? const Chip(label: Text('旧版课堂'))
-                          : lesson.live
-                          ? const Chip(label: Text('上课中'))
-                          : const Icon(Icons.chevron_right),
-                      onTap: () {
-                        if (lesson.oldVersion) {
-                          showDialog<void>(
-                            context: context,
-                            builder: (dialogContext) => AlertDialog(
-                              title: const Text('旧版课堂'),
-                              content: const Text('此旧版课堂暂不支持查看详情，请使用官方客户端查看。'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(dialogContext).pop(),
-                                  child: const Text('知道了'),
-                                ),
-                              ],
-                            ),
-                          );
-                          return;
-                        }
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => LessonDetailPage(
-                              controller: widget.controller,
-                              lesson: lesson,
-                            ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final wide =
+          constraints.maxWidth >= 1180 &&
+          constraints.maxWidth > constraints.maxHeight;
+      return Scaffold(
+        appBar: fullTitleAppBar(context, title: widget.course.name),
+        body: _accountChanged
+            ? const ContentMessage('账号已变更，请返回课程列表')
+            : wide
+            ? Row(
+                key: const ValueKey('lesson-master-detail'),
+                children: [
+                  SizedBox(width: 320, child: _lessonList(wide: true)),
+                  const VerticalDivider(width: 1),
+                  Expanded(
+                    child: _selectedLesson == null
+                        ? const ContentMessage('选择课堂查看回顾')
+                        : LessonDetailPage(
+                            key: ValueKey(_selectedLesson!.id),
+                            controller: widget.controller,
+                            lesson: _selectedLesson!,
+                            embedded: true,
                           ),
-                        );
-                      },
-                    ),
                   ),
-                if (_loading)
-                  const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                if (_error != null)
-                  ContentMessage(_error!, retry: () => _load()),
-                if (!_loading && _error == null && _lessons.isEmpty)
-                  const ContentMessage('暂无课堂'),
-                if (!_loading &&
-                    _error == null &&
-                    _hasMore &&
-                    _lessons.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: OutlinedButton(
-                      onPressed: _load,
-                      child: const Text('加载更多课堂'),
-                    ),
-                  ),
-              ],
+                ],
+              )
+            : _lessonList(wide: false),
+      );
+    },
+  );
+
+  Widget _lessonList({required bool wide}) => RefreshIndicator(
+    onRefresh: () => _load(reset: true),
+    child: ListView(
+      primary: !wide,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        if (widget.course.classroomName.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 2, top: 4, bottom: 12),
+            child: Text(
+              widget.course.classroomName,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
+        for (final lesson in _lessons)
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: ListTile(
+              selected: wide && _selectedLesson?.id == lesson.id,
+              selectedTileColor: Theme.of(context).colorScheme.primaryContainer,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 6,
+              ),
+              leading: const TintedIcon(Icons.class_outlined),
+              title: Text(lesson.title),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Wrap(
+                  spacing: 10,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (lesson.startedAt > 0)
+                      Text(formatTime(lesson.startedAt)),
+                    _attendanceLabel(lesson),
+                  ],
+                ),
+              ),
+              trailing: lesson.oldVersion
+                  ? const Chip(label: Text('旧版课堂'))
+                  : lesson.live
+                  ? const Chip(label: Text('上课中'))
+                  : const Icon(Icons.chevron_right),
+              onTap: () {
+                if (lesson.oldVersion) {
+                  showDialog<void>(
+                    context: context,
+                    builder: (dialogContext) => AlertDialog(
+                      title: const Text('旧版课堂'),
+                      content: const Text('此旧版课堂暂不支持查看详情，请使用官方客户端查看。'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          child: const Text('知道了'),
+                        ),
+                      ],
+                    ),
+                  );
+                  return;
+                }
+                if (wide) {
+                  setState(() => _selectedLesson = lesson);
+                } else {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => LessonDetailPage(
+                        controller: widget.controller,
+                        lesson: lesson,
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+        if (_error != null) ContentMessage(_error!, retry: () => _load()),
+        if (!_loading && _error == null && _lessons.isEmpty)
+          const ContentMessage('暂无课堂'),
+        if (!_loading && _error == null && _hasMore && _lessons.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: OutlinedButton(
+              onPressed: _load,
+              child: const Text('加载更多课堂'),
+            ),
+          ),
+      ],
+    ),
   );
 }
 
 class LessonDetailPage extends StatefulWidget {
   final AppController controller;
   final domain.Lesson lesson;
+  final bool embedded;
   const LessonDetailPage({
     super.key,
     required this.controller,
     required this.lesson,
+    this.embedded = false,
   });
   @override
   State<LessonDetailPage> createState() => _LessonDetailPageState();
@@ -347,6 +412,7 @@ class LessonDetailPage extends StatefulWidget {
 class _LessonDetailPageState extends State<LessonDetailPage> {
   late Future<domain.LessonDetail> _detail;
   bool _entering = false, _downloading = false;
+  int _reviewIndex = 0;
 
   @override
   void initState() {
@@ -505,6 +571,138 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
     ),
   );
 
+  Widget _wideReview(domain.LessonDetail detail, BoxConstraints constraints) {
+    final slides = detail.reviewSlides;
+    final index = _reviewIndex.clamp(0, slides.isEmpty ? 0 : slides.length - 1);
+    final slide = slides.isEmpty ? null : slides[index];
+    final record = slide?.ownAnswer ?? detail.answers[slide?.question?.id];
+    final information = <Widget>[
+      if (slide?.question != null) ...[
+        HtmlContent(slide!.question!.body),
+        for (final option in slide.question!.options.entries)
+          HtmlContent('${option.key}. ${option.value}'),
+      ],
+      if (record != null) OwnAnswer(record),
+    ];
+    return Row(
+      key: const ValueKey('review-wide-layout'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: constraints.maxWidth >= 1050 ? 240 : 204,
+          child: RefreshIndicator(
+            onRefresh: _reload,
+            child: ListView.builder(
+              primary: false,
+              padding: const EdgeInsets.fromLTRB(12, 8, 8, 16),
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: slides.length + 1,
+              itemBuilder: (context, item) {
+                if (item == 0) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _summary(detail),
+                      if (!detail.answersKnown)
+                        Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            detail.answerError ?? '作答状态未同步，已有答案可能未显示',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      const Divider(height: 20),
+                    ],
+                  );
+                }
+                final page = item - 1;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: SizedBox(
+                    height: 120,
+                    child: SlideThumbnail(
+                      key: ValueKey('review-thumbnail-$page'),
+                      slide: slides[page],
+                      page: page + 1,
+                      selected: page == index,
+                      onTap: () => setState(() => _reviewIndex = page),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: slide == null
+                      ? const ContentMessage('暂无课堂回顾')
+                      : SlideViewport(slide),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                      tooltip: '上一页',
+                      onPressed: index > 0
+                          ? () => setState(() => _reviewIndex = index - 1)
+                          : null,
+                      icon: const Icon(Icons.chevron_left),
+                    ),
+                    Text(
+                      slides.isEmpty
+                          ? '0 / 0'
+                          : '${index + 1} / ${slides.length}',
+                    ),
+                    IconButton(
+                      tooltip: '下一页',
+                      onPressed: index + 1 < slides.length
+                          ? () => setState(() => _reviewIndex = index + 1)
+                          : null,
+                      icon: const Icon(Icons.chevron_right),
+                    ),
+                    if (slide != null && slide.imageUrl.isNotEmpty)
+                      IconButton(
+                        tooltip: defaultTargetPlatform == TargetPlatform.windows
+                            ? '保存图片'
+                            : '保存到系统相册',
+                        onPressed: _downloading
+                            ? null
+                            : () => _download(detail, 'image', slide: slide),
+                        icon: const Icon(Icons.save_alt_rounded),
+                      ),
+                  ],
+                ),
+                if (information.isNotEmpty)
+                  SizedBox(
+                    height: (constraints.maxHeight * .30).clamp(80, 220),
+                    child: SingleChildScrollView(
+                      primary: false,
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: information,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<domain.LessonDetail>(
     future: _detail,
@@ -522,6 +720,7 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
         appBar: fullTitleAppBar(
           context,
           title: widget.lesson.title,
+          automaticallyImplyLeading: !widget.embedded,
           actions: [
             if (_downloading)
               const SizedBox(
@@ -560,60 +759,79 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
             ? const Center(child: CircularProgressIndicator())
             : detail.lesson.oldVersion
             ? const ContentMessage('此旧版课堂暂不支持查看详情，请使用官方客户端查看。')
-            : RefreshIndicator(
-                onRefresh: _reload,
-                child: CustomScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  slivers: [
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                      sliver: SliverToBoxAdapter(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _summary(detail),
-                            const Divider(height: 24),
-                            if (!detail.answersKnown)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: Text(
-                                  detail.answerError ?? '作答状态未同步，已有答案可能未显示',
-                                  style: Theme.of(context).textTheme.bodySmall,
+            : LayoutBuilder(
+                builder: (context, constraints) => useWideClassroom(constraints)
+                    ? _wideReview(detail, constraints)
+                    : RefreshIndicator(
+                        onRefresh: _reload,
+                        child: CustomScrollView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          slivers: [
+                            SliverPadding(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                              sliver: SliverToBoxAdapter(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _summary(detail),
+                                    const Divider(height: 24),
+                                    if (!detail.answersKnown)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 12,
+                                        ),
+                                        child: Text(
+                                          detail.answerError ??
+                                              '作答状态未同步，已有答案可能未显示',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            if (detail.reviewSlides.isEmpty)
+                              const SliverToBoxAdapter(
+                                child: ContentMessage('暂无课堂回顾'),
+                              )
+                            else
+                              SliverPadding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  0,
+                                  16,
+                                  20,
+                                ),
+                                sliver: SliverList.builder(
+                                  itemCount: detail.reviewSlides.length,
+                                  itemBuilder: (context, index) {
+                                    final slide = detail.reviewSlides[index];
+                                    return ReviewSlideCard(
+                                      key: ValueKey(
+                                        'review-${slide.id}-$index',
+                                      ),
+                                      slide: slide,
+                                      page: index + 1,
+                                      record:
+                                          slide.ownAnswer ??
+                                          detail.answers[slide.question?.id],
+                                      onSave: _downloading
+                                          ? null
+                                          : () => _download(
+                                              detail,
+                                              'image',
+                                              slide: slide,
+                                            ),
+                                    );
+                                  },
                                 ),
                               ),
                           ],
                         ),
                       ),
-                    ),
-                    if (detail.reviewSlides.isEmpty)
-                      const SliverToBoxAdapter(child: ContentMessage('暂无课堂回顾'))
-                    else
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                        sliver: SliverList.builder(
-                          itemCount: detail.reviewSlides.length,
-                          itemBuilder: (context, index) {
-                            final slide = detail.reviewSlides[index];
-                            return ReviewSlideCard(
-                              key: ValueKey('review-${slide.id}-$index'),
-                              slide: slide,
-                              page: index + 1,
-                              record:
-                                  slide.ownAnswer ??
-                                  detail.answers[slide.question?.id],
-                              onSave: _downloading
-                                  ? null
-                                  : () => _download(
-                                      detail,
-                                      'image',
-                                      slide: slide,
-                                    ),
-                            );
-                          },
-                        ),
-                      ),
-                  ],
-                ),
               ),
       );
     },

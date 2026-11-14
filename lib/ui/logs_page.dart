@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
-
 import '../app/app_controller.dart';
+import '../services/file_export.dart';
 import 'widgets.dart';
 
 class LogsPage extends StatefulWidget {
@@ -25,8 +24,12 @@ class _LogsPageState extends State<LogsPage> {
     final origin = shareOrigin(context);
     try {
       final file = await widget.controller.logs.exportDocument();
-      await SharePlus.instance.share(
-        ShareParams(files: [XFile(file.path)], sharePositionOrigin: origin),
+      await FileExport().deliver(
+        file,
+        suggestedName: 'ykt-helper-logs.txt',
+        mimeType: 'text/plain',
+        extension: 'txt',
+        sharePositionOrigin: origin,
       );
     } catch (_) {
       if (mounted) {

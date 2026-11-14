@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../services/app_permissions.dart';
+import 'settings_widgets.dart';
 
 String _permissionName(AppPermission permission) => switch (permission) {
   AppPermission.camera => '相机',
@@ -24,7 +25,7 @@ String _statusText(AppPermission permission, PermissionStatus status) =>
       PermissionStatus.denied =>
         permission == AppPermission.battery ? '仍受优化' : '未允许',
       PermissionStatus.notRequired => '无需授权',
-      PermissionStatus.unsupported => '暂不支持',
+      PermissionStatus.unsupported => '无需授权',
     };
 
 String _permissionExplanation(AppPermission permission, bool request) {
@@ -269,8 +270,7 @@ class _PermissionsPageState extends State<PermissionsPage>
             )
           : states == null
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
+          : SettingsList(
               children: [
                 for (final permission in AppPermission.values)
                   Card(

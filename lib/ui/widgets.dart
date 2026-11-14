@@ -12,9 +12,11 @@ Rect? shareOrigin(BuildContext context) {
 AppBar fullTitleAppBar(
   BuildContext context, {
   required String title,
+  bool automaticallyImplyLeading = true,
   List<Widget> actions = const [],
 }) {
   return AppBar(
+    automaticallyImplyLeading: automaticallyImplyLeading,
     title: Tooltip(
       message: title,
       child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -78,7 +80,13 @@ String formatTime(int milliseconds) {
 class ContentMessage extends StatelessWidget {
   final String text;
   final VoidCallback? retry;
-  const ContentMessage(this.text, {this.retry, super.key});
+  final String actionLabel;
+  const ContentMessage(
+    this.text, {
+    this.retry,
+    this.actionLabel = '重试',
+    super.key,
+  });
   @override
   Widget build(BuildContext context) => Center(
     child: Padding(
@@ -89,7 +97,7 @@ class ContentMessage extends StatelessWidget {
           Text(text, textAlign: TextAlign.center),
           if (retry != null) ...[
             const SizedBox(height: 12),
-            OutlinedButton(onPressed: retry, child: const Text('重试')),
+            OutlinedButton(onPressed: retry, child: Text(actionLabel)),
           ],
         ],
       ),
@@ -145,6 +153,123 @@ class SlideImage extends StatelessWidget {
             ),
           ),
   );
+}
+
+/// A classroom uses separate scrolling panes when there is room for a viewer.
+bool useWideClassroom(BoxConstraints constraints) =>
+    constraints.maxWidth >= 1000 ||
+    constraints.maxWidth >= 840 &&
+        constraints.maxWidth > constraints.maxHeight ||
+    constraints.maxWidth >= 760 && constraints.maxHeight <= 460;
+
+/// A bounded stage keeps slides visible in full, including portrait slides.
+/// The mobile feed continues to use [SlideImage] at its natural aspect ratio.
+class SlideViewport extends StatelessWidget {
+  final domain.Slide? slide;
+  final ImageProvider? imageProvider;
+  const SlideViewport(this.slide, {this.imageProvider, super.key});
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(14),
+    ),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: slide == null
+          ? const Center(child: Text('等待教师展示课件'))
+          : slide!.imageUrl.isEmpty && imageProvider == null
+          ? const Center(child: Text('此页没有课件图片'))
+          : LayoutBuilder(
+              builder: (context, constraints) => InteractiveViewer(
+                key: ValueKey(slide!.id),
+                minScale: 1,
+                maxScale: 5,
+                child: Image(
+                  image: imageProvider ?? NetworkImage(slide!.imageUrl),
+                  width: constraints.maxWidth,
+                  height: constraints.maxHeight,
+                  fit: BoxFit.contain,
+                  frameBuilder: (context, child, frame, synchronous) =>
+                      synchronous || frame != null
+                      ? child
+                      : const Center(
+                          child: SizedBox.square(
+                            dimension: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                  errorBuilder: (context, error, stack) =>
+                      const Center(child: Text('课件图片加载失败')),
+                ),
+              ),
+            ),
+    ),
+  );
+}
+
+class SlideThumbnail extends StatelessWidget {
+  final domain.Slide slide;
+  final int page;
+  final bool selected;
+  final VoidCallback onTap;
+  const SlideThumbnail({
+    super.key,
+    required this.slide,
+    required this.page,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: Material(
+        color: selected
+            ? scheme.primaryContainer
+            : scheme.surfaceContainerLowest,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: selected ? scheme.primary : scheme.outlineVariant,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: slide.imageUrl.isEmpty
+                    ? const Icon(Icons.slideshow_outlined)
+                    : Image.network(
+                        slide.imageUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stack) =>
+                            const Icon(Icons.slideshow_outlined),
+                      ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                child: Text(
+                  '$page',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class OwnAnswer extends StatelessWidget {

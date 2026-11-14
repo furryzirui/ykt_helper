@@ -2,7 +2,7 @@
 
 普通版雨课堂辅助工具，支持 Android、Windows 和 iOS。
 
-**版本 1.0.0** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/tag/v1.0.0) · [GPL-3.0](LICENSE)
+**稳定版 1.0.0** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/latest) · [GPL-3.0](LICENSE)
 
 ## 功能
 

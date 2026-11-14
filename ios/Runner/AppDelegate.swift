@@ -19,6 +19,17 @@ import UserNotifications
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
+    let integrity = FlutterMethodChannel(
+      name: "ykt_helper/integrity", binaryMessenger: messenger
+    )
+    integrity.setMethodCallHandler { call, result in
+      switch call.method {
+      case "applicationRoot":
+        result(Bundle.main.bundlePath)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
     let permissions = FlutterMethodChannel(
       name: "ykt_helper/app_permissions", binaryMessenger: messenger
     )

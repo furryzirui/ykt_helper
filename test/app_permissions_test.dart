@@ -172,14 +172,14 @@ void main() {
         return true;
       });
       final result = await permissions.check();
-      expect(result.last.status, PermissionStatus.unsupported);
+      expect(result.last.status, PermissionStatus.notRequired);
       expect(result[2].status, PermissionStatus.denied);
       expect(await permissions.request(AppPermission.photos), isTrue);
       expect(methods, ['check', 'request']);
     },
   );
 
-  test('Windows folder saving requires no Android photo permission', () async {
+  test('Windows permissions require no Android authorization', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     final states = await permissions.check();
     expect(
@@ -189,9 +189,7 @@ void main() {
       PermissionStatus.notRequired,
     );
     expect(
-      states
-          .where((state) => state.permission != AppPermission.photos)
-          .every((state) => state.status == PermissionStatus.unsupported),
+      states.every((state) => state.status == PermissionStatus.notRequired),
       isTrue,
     );
   });

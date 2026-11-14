@@ -176,7 +176,9 @@ void main() {
   });
   testWidgets('后台刷新时首页不显示周期顶部进度条', (tester) async {
     final controller = _UiController()..busy = true;
-    await tester.pumpWidget(RainApp(controller: controller));
+    await tester.pumpWidget(
+      RainApp(controller: controller, startupChecks: false),
+    );
     expect(find.byType(LinearProgressIndicator), findsNothing);
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -451,8 +453,11 @@ void main() {
 
   testWidgets('底栏可切换课程动态设置', (tester) async {
     final controller = _UiController();
-    await tester.pumpWidget(RainApp(controller: controller));
-    expect(find.text('请在设置中登录'), findsOneWidget);
+    await tester.pumpWidget(
+      RainApp(controller: controller, startupChecks: false),
+    );
+    expect(find.text('未登录'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '登录'), findsOneWidget);
     expect(find.byTooltip('扫码进入课堂'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
@@ -515,7 +520,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('固定内容'), findsOneWidget);
     expect(controller.settings.autoAnswer, isFalse);
-    await tester.ensureVisible(find.text('保存设置'));
+    await tester.scrollUntilVisible(
+      find.widgetWithText(FilledButton, '保存设置'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(FilledButton, '保存设置').hitTestable(),
+      findsOneWidget,
+    );
     await tester.tap(find.text('保存设置'));
     await tester.pumpAndSettle();
     expect(controller.settings.autoAnswer, isFalse);
@@ -528,11 +542,26 @@ void main() {
     final answer = find.byWidgetPredicate(
       (widget) => widget is TextField && widget.decoration?.labelText == '固定答案',
     );
-    await tester.ensureVisible(answer);
+    await tester.scrollUntilVisible(
+      answer,
+      -180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(answer.hitTestable(), findsOneWidget);
     await tester.enterText(answer, 'A');
     tester.testTextInput.hide();
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('保存设置'));
+    await tester.scrollUntilVisible(
+      find.widgetWithText(FilledButton, '保存设置'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(FilledButton, '保存设置').hitTestable(),
+      findsOneWidget,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存设置'));
     await tester.pumpAndSettle();
@@ -553,7 +582,9 @@ void main() {
         name: '全部课程测试',
       ),
     ];
-    await tester.pumpWidget(RainApp(controller: controller));
+    await tester.pumpWidget(
+      RainApp(controller: controller, startupChecks: false),
+    );
     await tester.tap(find.text('全部课程测试'));
     await tester.pumpAndSettle();
     expect(controller.pages, [0]);

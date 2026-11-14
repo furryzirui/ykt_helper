@@ -7,6 +7,8 @@ import '../app/app_controller.dart';
 import '../domain/models.dart';
 import '../services/ai_answer.dart';
 import '../services/app_logs.dart';
+import 'settings_widgets.dart';
+import 'widgets.dart';
 
 class AutomationDraft {
   AppSettings? settings;
@@ -155,18 +157,7 @@ class _AutomationPageState extends State<AutomationPage> {
   TextEditingController _field(String name, String value) =>
       _fields.putIfAbsent(name, () => TextEditingController(text: value));
 
-  Widget _settingIcon(IconData icon, {bool account = false}) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: account ? 44 : 34,
-      height: account ? 44 : 34,
-      decoration: BoxDecoration(
-        color: scheme.primaryContainer,
-        borderRadius: BorderRadius.circular(account ? 14 : 10),
-      ),
-      child: Icon(icon, size: account ? 26 : 20, color: scheme.primary),
-    );
-  }
+  Widget _settingIcon(IconData icon) => TintedIcon(icon);
 
   @override
   void dispose() {
@@ -225,24 +216,32 @@ class _AutomationPageState extends State<AutomationPage> {
     IconData? icon,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 14),
-    child: TextField(
-      enabled: !_disabled,
-      controller: _field(name, value),
-      obscureText: secret,
-      minLines: lines,
-      maxLines: lines,
-      autocorrect: !secret,
-      enableSuggestions: !secret,
-      enableIMEPersonalizedLearning: !secret,
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        helperText: helper,
-        helperMaxLines: 2,
-        prefixIcon: icon == null ? null : Icon(icon),
-      ),
-      onChanged: changed,
-      onEditingComplete: () => FocusScope.of(context).unfocus(),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          enabled: !_disabled,
+          controller: _field(name, value),
+          obscureText: secret,
+          minLines: lines,
+          maxLines: lines,
+          autocorrect: !secret,
+          enableSuggestions: !secret,
+          enableIMEPersonalizedLearning: !secret,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: hint,
+            prefixIcon: icon == null ? null : Icon(icon),
+          ),
+          onChanged: changed,
+          onEditingComplete: () => FocusScope.of(context).unfocus(),
+        ),
+        if (helper != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: SettingDescription(helper),
+          ),
+      ],
     ),
   );
 
@@ -260,8 +259,7 @@ class _AutomationPageState extends State<AutomationPage> {
       final settings = _draft!;
       return Scaffold(
         appBar: AppBar(title: const Text('自动化')),
-        body: ListView(
-          padding: const EdgeInsets.all(16),
+        body: SettingsList(
           children: [
             Card(
               child: Padding(
@@ -270,27 +268,59 @@ class _AutomationPageState extends State<AutomationPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                      secondary: _settingIcon(Icons.power_settings_new_rounded),
+                      title: const Text('自动启动服务'),
+                      subtitle: SettingDescription(
+                        !c.systemServiceSupported
+                            ? '当前平台无需系统服务'
+                            : '启用自动化时自动启动后台服务',
+                      ),
+                      value: settings.autoStartService,
+                      onChanged:
+                          _disabled ||
+                              !c.systemServiceSupported ||
+                              !(settings.autoEnter || settings.autoAnswer)
+                          ? null
+                          : (value) => setState(
+                              () => settings.autoStartService = value,
+                            ),
+                    ),
+                    const Divider(height: 1),
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(vertical: 4),
                       secondary: _settingIcon(Icons.how_to_reg_outlined),
                       title: const Text('自动签到'),
+                      subtitle: const SettingDescription('发现正在上课的课堂后自动进入并签到'),
                       value: settings.autoEnter,
                       onChanged: _disabled
                           ? null
                           : (value) {
-                              setState(() => settings.autoEnter = value);
+                              setState(() {
+                                settings.autoEnter = value;
+                                if (!settings.autoEnter &&
+                                    !settings.autoAnswer) {
+                                  settings.autoStartService = false;
+                                }
+                              });
                             },
                     ),
                     const Divider(height: 1),
                     SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 4),
                       secondary: _settingIcon(Icons.auto_awesome_outlined),
                       title: const Text('自动答题'),
+                      subtitle: const SettingDescription('按固定内容或 AI 生成答案'),
                       value: settings.autoAnswer,
                       onChanged: _disabled
                           ? null
                           : (value) {
                               setState(() {
                                 settings.autoAnswer = value;
+                                if (!settings.autoEnter &&
+                                    !settings.autoAnswer) {
+                                  settings.autoStartService = false;
+                                }
                                 _scheduleModels();
                               });
                             },
@@ -321,10 +351,10 @@ class _AutomationPageState extends State<AutomationPage> {
                     if (settings.autoAnswer) ...[
                       const Divider(height: 1),
                       SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 4),
                         secondary: _settingIcon(Icons.send_outlined),
                         title: const Text('自动提交'),
-                        subtitle: const Text('关闭时仅填入答案，确认后提交'),
+                        subtitle: const SettingDescription('关闭时仅填入答案，由你确认提交'),
                         value: settings.autoSubmit,
                         onChanged: _disabled
                             ? null
@@ -347,7 +377,8 @@ class _AutomationPageState extends State<AutomationPage> {
                             decoration: const InputDecoration(
                               labelText: '提交延迟',
                               suffixText: '秒',
-                              helperText: '1–3600 秒',
+                              helperText: '答案生成后等待的时间，1–3600 秒',
+                              helperMaxLines: 3,
                               prefixIcon: Icon(Icons.timer_outlined),
                             ),
                             onChanged: (value) =>
@@ -381,6 +412,10 @@ class _AutomationPageState extends State<AutomationPage> {
                                 });
                               },
                       ),
+                      const Padding(
+                        padding: EdgeInsets.only(top: 6),
+                        child: SettingDescription('选择答案生成方式'),
+                      ),
                       const SizedBox(height: 16),
                       if (settings.answerMode == AnswerMode.fixed)
                         _input(
@@ -390,6 +425,8 @@ class _AutomationPageState extends State<AutomationPage> {
                           (value) => settings.fixedAnswer = value,
                           lines: 3,
                           hint: '选择题填 A 或 AB；填空题每行一个答案',
+                          helper: '选择题填写 A 或 AB，填空题每行一个答案',
+                          icon: Icons.notes_outlined,
                         )
                       else ...[
                         _input(
@@ -401,6 +438,7 @@ class _AutomationPageState extends State<AutomationPage> {
                             _scheduleModels(clearSelection: true);
                           }),
                           hint: 'https://api.example.com/v1',
+                          helper: 'OpenAI 兼容接口地址',
                           icon: Icons.cloud_outlined,
                         ),
                         _input(
@@ -412,83 +450,78 @@ class _AutomationPageState extends State<AutomationPage> {
                             _scheduleModels(clearSelection: true);
                           }),
                           secret: true,
+                          helper: '仅保存在本机，用于调用模型',
                           icon: Icons.key_outlined,
                         ),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: DropdownButtonFormField<String>(
-                                key: ValueKey(
-                                  'models-$_modelGeneration-${settings.model}',
-                                ),
-                                initialValue: _models.contains(settings.model)
-                                    ? settings.model
-                                    : null,
-                                isExpanded: true,
-                                decoration: InputDecoration(
-                                  labelText: '模型',
-                                  hintText: _loadingModels
-                                      ? '正在获取模型…'
-                                      : '填写地址和密钥后自动获取',
-                                  prefixIcon: const Icon(Icons.memory_outlined),
-                                  helperText: _defaultModelSelected
-                                      ? '已选择首个模型，可切换'
-                                      : null,
-                                ),
-                                items: _models
-                                    .map(
-                                      (model) => DropdownMenuItem(
-                                        value: model,
-                                        child: Text(
-                                          model,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
+                        DropdownButtonFormField<String>(
+                          key: ValueKey(
+                            'models-$_modelGeneration-${settings.model}',
+                          ),
+                          initialValue: _models.contains(settings.model)
+                              ? settings.model
+                              : null,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: '模型',
+                            hintText: _loadingModels
+                                ? '正在获取模型…'
+                                : '填写地址和密钥后自动获取',
+                            prefixIcon: const Icon(Icons.memory_outlined),
+                            suffixIcon: _loadingModels
+                                ? const Padding(
+                                    padding: EdgeInsets.all(14),
+                                    child: SizedBox.square(
+                                      dimension: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
                                       ),
-                                    )
-                                    .toList(),
-                                onChanged: _disabled || !_modelsReady
-                                    ? null
-                                    : (model) {
-                                        if (model != null) {
-                                          setState(() {
-                                            settings.model = model;
-                                            _defaultModelSelected = false;
-                                          });
-                                        }
-                                      },
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.only(left: 4, top: 4),
-                              child: _loadingModels
-                                  ? const Padding(
-                                      padding: EdgeInsets.all(12),
-                                      child: SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      ),
-                                    )
-                                  : IconButton(
-                                      tooltip: '刷新模型列表',
-                                      onPressed:
-                                          _disabled ||
-                                              settings.baseUrl.isEmpty ||
-                                              settings.apiKey.isEmpty
-                                          ? null
-                                          : () => setState(
-                                              () => _scheduleModels(
-                                                immediate: true,
-                                              ),
-                                            ),
-                                      icon: const Icon(Icons.refresh),
                                     ),
-                            ),
-                          ],
+                                  )
+                                : IconButton(
+                                    tooltip: '刷新模型列表',
+                                    onPressed:
+                                        _disabled ||
+                                            settings.baseUrl.isEmpty ||
+                                            settings.apiKey.isEmpty
+                                        ? null
+                                        : () => setState(
+                                            () => _scheduleModels(
+                                              immediate: true,
+                                            ),
+                                          ),
+                                    icon: const Icon(Icons.refresh),
+                                  ),
+                          ),
+                          items: _models
+                              .map(
+                                (model) => DropdownMenuItem(
+                                  value: model,
+                                  child: Text(
+                                    model,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: _disabled || !_modelsReady
+                              ? null
+                              : (model) {
+                                  if (model != null) {
+                                    setState(() {
+                                      settings.model = model;
+                                      _defaultModelSelected = false;
+                                    });
+                                  }
+                                },
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: SettingDescription(
+                            _defaultModelSelected
+                                ? '已选择首个模型，可切换'
+                                : '从服务商获取，点击刷新重新加载',
+                          ),
                         ),
                         if (_modelsError != null)
                           Padding(
@@ -507,7 +540,7 @@ class _AutomationPageState extends State<AutomationPage> {
                           settings.customPrompt,
                           (value) => settings.customPrompt = value,
                           lines: 4,
-                          helper: '{question} 替换为题目；没有占位符时会自动追加题目',
+                          helper: '{question} 自动替换为题目',
                           icon: Icons.edit_note_outlined,
                         ),
                         DropdownButtonFormField<SlideScope>(
@@ -520,19 +553,35 @@ class _AutomationPageState extends State<AutomationPage> {
                           items: const [
                             DropdownMenuItem(
                               value: SlideScope.none,
-                              child: Text('不发送课件'),
+                              child: Text(
+                                '不发送课件',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                             DropdownMenuItem(
                               value: SlideScope.current,
-                              child: Text('当前页课件'),
+                              child: Text(
+                                '当前页课件',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                             DropdownMenuItem(
                               value: SlideScope.currentAndNext,
-                              child: Text('当前页和后一页课件'),
+                              child: Text(
+                                '当前页和后一页课件',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                             DropdownMenuItem(
                               value: SlideScope.all,
-                              child: Text('完整课件'),
+                              child: Text(
+                                '完整课件',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ],
                           onChanged: _disabled
@@ -542,6 +591,10 @@ class _AutomationPageState extends State<AutomationPage> {
                                     setState(() => settings.slideScope = value);
                                   }
                                 },
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: SettingDescription('仅向所选 AI 服务发送指定范围的课件'),
                         ),
                         const SizedBox(height: 12),
                       ],

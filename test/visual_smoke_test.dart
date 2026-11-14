@@ -220,7 +220,11 @@ void main() {
     final suffix = scale == 1 ? 'normal' : 'large-text';
     testWidgets('360x800 courses and history $suffix', (tester) async {
       final controller = _VisualController();
-      await _mount(tester, RainApp(controller: controller), scale);
+      await _mount(
+        tester,
+        RainApp(controller: controller, startupChecks: false),
+        scale,
+      );
       await _capture(tester, 'courses-$suffix');
       expect(find.text('高等数学'), findsOneWidget);
       await tester.pumpWidget(

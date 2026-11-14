@@ -98,6 +98,24 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
   });
 
+  testWidgets('无需系统授权的权限显示无需授权且不打开申请页面', (tester) async {
+    final permissions = _Permissions();
+    for (final permission in AppPermission.values) {
+      permissions.states[permission] = PermissionStatus.notRequired;
+    }
+    await _show(tester, permissions);
+    expect(find.text('无需授权'), findsNWidgets(4));
+    expect(find.text('暂不支持'), findsNothing);
+    for (final name in ['相机', '通知', '保存到相册', '电池优化']) {
+      expect(tester.widget<ListTile>(_row(name)).onTap, isNull);
+      await tester.tap(_row(name));
+    }
+    await tester.pumpAndSettle();
+    expect(permissions.opened, isEmpty);
+    expect(permissions.requested, isEmpty);
+    expect(find.byType(AlertDialog), findsNothing);
+  });
+
   testWidgets(
     'both denied and granted settings require explanation confirmation',
     (tester) async {

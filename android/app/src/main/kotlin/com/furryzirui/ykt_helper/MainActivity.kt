@@ -18,6 +18,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -85,6 +86,19 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "ykt_helper/integrity"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "identity" -> try {
+                    result.success(mapOf("certificateSha256" to certificateDigests()))
+                } catch (_: Exception) {
+                    result.error("identity_unavailable", "无法读取应用签名信息", null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "ykt_helper/app_permissions"
@@ -162,6 +176,29 @@ class MainActivity : FlutterActivity() {
             } else {
                 saveGalleryImage(request)
             }
+        }
+    }
+
+    private fun certificateDigests(): List<String> {
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageManager.getPackageInfo(
+                packageName,
+                PackageManager.GET_SIGNING_CERTIFICATES
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNATURES)
+        }
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo.apkContentsSigners.toList()
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures.toList()
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        return signatures.map { signature ->
+            digest.digest(signature.toByteArray())
+                .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
         }
     }
 

@@ -40,6 +40,10 @@ def package(root: Path, app: Path, output: Path) -> Path:
         payload = Path(staging) / "Payload"
         payload.mkdir()
         shutil.copytree(app, payload / app.name, symlinks=True)
+        subprocess.run([
+            sys.executable, str(root / 'scripts/integrity/generate.py'),
+            '--root', str(payload / app.name), '--platform', 'ios',
+        ], check=True)
         # ditto preserves executable permissions, resource forks and symlinks.
         subprocess.run(["ditto", "-c", "-k", "--keepParent", "--norsrc", str(payload), str(destination)], check=True)
     with zipfile.ZipFile(destination) as archive:

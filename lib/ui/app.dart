@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../app/app_controller.dart';
+import '../services/startup_checks.dart';
 import 'course_pages.dart';
 import 'live_page.dart';
 import 'scan_page.dart';
@@ -155,7 +156,12 @@ ThemeData rainTheme(Brightness brightness) {
 
 class RainApp extends StatelessWidget {
   final AppController controller;
-  const RainApp({super.key, required this.controller});
+  final bool startupChecks;
+  const RainApp({
+    super.key,
+    required this.controller,
+    this.startupChecks = true,
+  });
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'ykt_helper',
@@ -165,7 +171,10 @@ class RainApp extends StatelessWidget {
     localizationsDelegates: GlobalMaterialLocalizations.delegates,
     theme: rainTheme(Brightness.light),
     darkTheme: rainTheme(Brightness.dark),
-    home: _Home(controller: controller),
+    home: StartupChecks(
+      enabled: startupChecks,
+      child: _Home(controller: controller),
+    ),
   );
 }
 
@@ -214,39 +223,10 @@ class _HomeState extends State<_Home> {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
-    builder: (context, _) => Scaffold(
-      appBar: AppBar(
-        title: Text(_labels[_index]),
-        actions: [
-          if (_index < 2)
-            IconButton(
-              tooltip: '扫码进入课堂',
-              onPressed: _scanning || widget.controller.account == null
-                  ? null
-                  : _scan,
-              icon: _scanning
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.qr_code_scanner_rounded),
-            ),
-          if (_index < 2)
-            IconButton(
-              tooltip: '刷新',
-              onPressed: widget.controller.busy
-                  ? null
-                  : () async {
-                      try {
-                        await widget.controller.refresh();
-                      } catch (_) {}
-                    },
-              icon: const Icon(Icons.refresh),
-            ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
+    builder: (context, _) => LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 840;
+        final content = Column(
           children: [
             if (widget.controller.error != null && _index < 2)
               MaterialBanner(
@@ -275,39 +255,120 @@ class _HomeState extends State<_Home> {
               ),
             ),
           ],
-        ),
-      ),
-      bottomNavigationBar: DecoratedBox(
-        position: DecorationPosition.foreground,
-        decoration: BoxDecoration(
-          border: Border(
-            top: BorderSide(
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
+        );
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(_labels[_index]),
+            actions: [
+              if (_index < 2)
+                IconButton(
+                  tooltip: '扫码进入课堂',
+                  onPressed: _scanning || widget.controller.account == null
+                      ? null
+                      : _scan,
+                  icon: _scanning
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.qr_code_scanner_rounded),
+                ),
+              if (_index < 2)
+                IconButton(
+                  tooltip: '刷新',
+                  onPressed: widget.controller.busy
+                      ? null
+                      : () async {
+                          try {
+                            await widget.controller.refresh();
+                          } catch (_) {}
+                        },
+                  icon: const Icon(Icons.refresh),
+                ),
+            ],
           ),
-        ),
-        child: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (index) => setState(() => _index = index),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.menu_book_outlined),
-              selectedIcon: Icon(Icons.menu_book_rounded),
-              label: '课程',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.class_outlined),
-              selectedIcon: Icon(Icons.class_rounded),
-              label: '动态',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings_rounded),
-              label: '设置',
-            ),
-          ],
-        ),
-      ),
+          body: SafeArea(
+            child: wide
+                ? Row(
+                    children: [
+                      SingleChildScrollView(
+                        primary: false,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: (constraints.maxHeight - 80).clamp(
+                              0,
+                              double.infinity,
+                            ),
+                          ),
+                          child: IntrinsicHeight(
+                            child: NavigationRail(
+                              selectedIndex: _index,
+                              labelType: NavigationRailLabelType.all,
+                              onDestinationSelected: (index) =>
+                                  setState(() => _index = index),
+                              destinations: const [
+                                NavigationRailDestination(
+                                  icon: Icon(Icons.menu_book_outlined),
+                                  selectedIcon: Icon(Icons.menu_book_rounded),
+                                  label: Text('课程'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: Icon(Icons.class_outlined),
+                                  selectedIcon: Icon(Icons.class_rounded),
+                                  label: Text('动态'),
+                                ),
+                                NavigationRailDestination(
+                                  icon: Icon(Icons.settings_outlined),
+                                  selectedIcon: Icon(Icons.settings_rounded),
+                                  label: Text('设置'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const VerticalDivider(width: 1),
+                      Expanded(child: content),
+                    ],
+                  )
+                : content,
+          ),
+          bottomNavigationBar: wide
+              ? null
+              : DecoratedBox(
+                  position: DecorationPosition.foreground,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      top: BorderSide(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
+                    ),
+                  ),
+                  child: NavigationBar(
+                    selectedIndex: _index,
+                    onDestinationSelected: (index) =>
+                        setState(() => _index = index),
+                    destinations: const [
+                      NavigationDestination(
+                        icon: Icon(Icons.menu_book_outlined),
+                        selectedIcon: Icon(Icons.menu_book_rounded),
+                        label: '课程',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.class_outlined),
+                        selectedIcon: Icon(Icons.class_rounded),
+                        label: '动态',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.settings_outlined),
+                        selectedIcon: Icon(Icons.settings_rounded),
+                        label: '设置',
+                      ),
+                    ],
+                  ),
+                ),
+        );
+      },
     ),
   );
 }

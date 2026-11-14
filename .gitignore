@@ -24,3 +24,5 @@ windows/flutter/ephemeral/
 *.ipa
 *.p12
 *.pfx
+__pycache__/
+*.pyc

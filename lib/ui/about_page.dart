@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/app_info.dart';
-import 'widgets.dart';
+import 'settings_widgets.dart';
 
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
@@ -27,36 +27,36 @@ class AboutPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('关于')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
+    body: SettingsList(
       children: [
         const Card(
-          child: ListTile(
-            leading: TintedIcon(Icons.menu_book_rounded),
-            title: Text(AppInfo.name),
+          child: SettingTile(
+            icon: Icons.menu_book_rounded,
+            title: AppInfo.name,
+            description: '版本 ${AppInfo.version}',
           ),
         ),
         const Card(
-          child: ListTile(
-            leading: TintedIcon(Icons.person_outline_rounded),
-            title: Text('开发者'),
-            subtitle: Text(AppInfo.developer),
+          child: SettingTile(
+            icon: Icons.person_outline_rounded,
+            title: '开发者',
+            description: AppInfo.developer,
           ),
         ),
         Card(
-          child: ListTile(
-            leading: const TintedIcon(Icons.code_rounded),
-            title: const Text('开源仓库'),
-            subtitle: const Text(AppInfo.repositoryUrl),
+          child: SettingTile(
+            icon: Icons.code_rounded,
+            title: '开源仓库',
+            description: 'github.com/furryzirui/ykt_helper',
             trailing: const Icon(Icons.open_in_new_rounded),
             onTap: () => _openRepository(context),
           ),
         ),
         const Card(
-          child: ListTile(
-            leading: TintedIcon(Icons.description_outlined),
-            title: Text('开源许可'),
-            subtitle: Text(AppInfo.license),
+          child: SettingTile(
+            icon: Icons.description_outlined,
+            title: '开源许可',
+            description: AppInfo.license,
           ),
         ),
       ],

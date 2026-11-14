@@ -9,6 +9,7 @@ import '../app/app_controller.dart';
 import '../domain/models.dart' as domain;
 import '../services/app_permissions.dart';
 import 'permissions_page.dart';
+import 'login_page.dart';
 import 'widgets.dart';
 
 class LiveListPage extends StatefulWidget {
@@ -47,7 +48,17 @@ class _LiveListPageState extends State<LiveListPage> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
     builder: (context, _) => widget.controller.account == null
-        ? const ContentMessage('请在设置中登录')
+        ? ContentMessage(
+            '未登录',
+            actionLabel: '登录',
+            retry: !widget.controller.initialized
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => LoginPage(controller: widget.controller),
+                    ),
+                  ),
+          )
         : widget.controller.liveLessons.isEmpty
         ? RefreshIndicator(
             onRefresh: widget.controller.refresh,
@@ -246,6 +257,183 @@ class _LivePageState extends State<LivePage> {
     }
   }
 
+  Widget _wideLive(LiveClass live, BoxConstraints constraints) {
+    final presentation = live.currentPresentation;
+    final question = live.currentQuestion;
+    final panelWidth = (constraints.maxWidth * .34).clamp(280.0, 400.0);
+    return Row(
+      key: const ValueKey('live-wide-layout'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 12, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (presentation != null)
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      presentation.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: const Text('跟随教师翻页'),
+                    value: live.followTeacher,
+                    onChanged: (value) =>
+                        widget.controller.followTeacher(live, value),
+                  ),
+                Expanded(child: SlideViewport(live.currentSlide)),
+                if (presentation != null && presentation.slides.isNotEmpty) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        tooltip: '上一页',
+                        onPressed: live.slideIndex > 0
+                            ? () => widget.controller.selectSlide(
+                                live,
+                                live.slideIndex - 1,
+                              )
+                            : null,
+                        icon: const Icon(Icons.chevron_left),
+                      ),
+                      Text(
+                        '${live.slideIndex + 1} / ${presentation.slides.length}',
+                      ),
+                      IconButton(
+                        tooltip: '下一页',
+                        onPressed:
+                            live.slideIndex + 1 < presentation.slides.length
+                            ? () => widget.controller.selectSlide(
+                                live,
+                                live.slideIndex + 1,
+                              )
+                            : null,
+                        icon: const Icon(Icons.chevron_right),
+                      ),
+                    ],
+                  ),
+                  if (constraints.maxHeight >= 440)
+                    SizedBox(
+                      height: 92,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: presentation.slides.length,
+                        separatorBuilder: (context, index) =>
+                            const SizedBox(width: 8),
+                        itemBuilder: (context, index) => SizedBox(
+                          width: 120,
+                          child: SlideThumbnail(
+                            key: ValueKey('live-thumbnail-$index'),
+                            slide: presentation.slides[index],
+                            page: index + 1,
+                            selected: index == live.slideIndex,
+                            onTap: () =>
+                                widget.controller.selectSlide(live, index),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        SizedBox(
+          width: panelWidth,
+          child: ListView(
+            primary: false,
+            padding: const EdgeInsets.fromLTRB(12, 8, 16, 20),
+            children: [
+              StatusLine(
+                icon: live.ended ? Icons.stop_circle_outlined : Icons.sensors,
+                text: live.ended ? '课堂已结束' : live.connectionLabel,
+              ),
+              const SizedBox(height: 12),
+              StatusLine(
+                icon: Icons.how_to_reg_outlined,
+                text: '本节签到：${live.checkinText}',
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _locationBusy || live.ended ? null : _checkin,
+                icon: const Icon(Icons.location_on_outlined),
+                label: Text(
+                  _locationBusy
+                      ? '签到中…'
+                      : live.location?.signed == true
+                      ? '位置已签到'
+                      : '位置签到',
+                ),
+              ),
+              for (final message in [
+                live.attendanceError,
+                _locationMessage,
+                live.error,
+                widget.controller.backgroundWarning,
+                if (live.answerSyncError != null)
+                  '作答状态未能同步：${live.answerSyncError}',
+              ])
+                if (message != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      message,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+              if (_exporting)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              if (question != null)
+                QuestionCard(
+                  key: ValueKey(question.id),
+                  controller: widget.controller,
+                  classroom: live,
+                  question: question,
+                ),
+              if (live.questions.isNotEmpty) ...[
+                const Divider(height: 24),
+                Text('课堂题目', style: Theme.of(context).textTheme.titleMedium),
+                for (final question in live.questions.values)
+                  ExpansionTile(
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 4),
+                    title: Text(
+                      '${question.typeLabel} · ${live.answers.containsKey(question.id)
+                          ? '已提交'
+                          : live.answersKnown
+                          ? '暂无作答记录'
+                          : '状态未同步'}',
+                    ),
+                    subtitle: live.autoStates[question.id] == null
+                        ? null
+                        : Text(live.autoStates[question.id]!),
+                    children: [
+                      QuestionCard(
+                        key: ValueKey('list-${question.id}'),
+                        controller: widget.controller,
+                        classroom: live,
+                        question: question,
+                      ),
+                    ],
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
@@ -313,163 +501,183 @@ class _LivePageState extends State<LivePage> {
             ),
           ],
         ),
-        body: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: StatusLine(
-                    icon: live.ended
-                        ? Icons.stop_circle_outlined
-                        : Icons.sensors,
-                    text: live.ended ? '课堂已结束' : live.connectionLabel,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: _locationBusy || live.ended ? null : _checkin,
-                  icon: const Icon(Icons.location_on_outlined),
-                  label: Text(
-                    _locationBusy
-                        ? '签到中…'
-                        : live.location?.signed == true
-                        ? '位置已签到'
-                        : '位置签到',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            StatusLine(
-              icon: Icons.how_to_reg_outlined,
-              text: '本节签到：${live.checkinText}',
-            ),
-            if (live.attendanceError != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  live.attendanceError!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            if (_locationMessage != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(_locationMessage!),
-              ),
-            if (live.error != null)
-              Text(
-                live.error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            if (widget.controller.backgroundWarning != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  widget.controller.backgroundWarning!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            if (live.answerSyncError != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  '作答状态未能同步：${live.answerSyncError}',
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            if (_exporting)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-              ),
-            const SizedBox(height: 12),
-            if (presentation != null) ...[
-              Text(
-                presentation.title,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('跟随教师翻页'),
-                value: live.followTeacher,
-                onChanged: (value) =>
-                    widget.controller.followTeacher(live, value),
-              ),
-            ],
-            if (slide != null)
-              SlideImage(slide)
-            else
-              const SizedBox(
-                height: 200,
-                child: Center(child: Text('等待教师展示课件')),
-              ),
-            if (presentation != null && presentation.slides.isNotEmpty)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    tooltip: '上一页',
-                    onPressed: live.slideIndex > 0
-                        ? () => widget.controller.selectSlide(
-                            live,
-                            live.slideIndex - 1,
-                          )
-                        : null,
-                    icon: const Icon(Icons.chevron_left),
-                  ),
-                  Text(
-                    '${live.slideIndex + 1} / ${presentation.slides.length}',
-                  ),
-                  IconButton(
-                    tooltip: '下一页',
-                    onPressed: live.slideIndex + 1 < presentation.slides.length
-                        ? () => widget.controller.selectSlide(
-                            live,
-                            live.slideIndex + 1,
-                          )
-                        : null,
-                    icon: const Icon(Icons.chevron_right),
-                  ),
-                ],
-              ),
-            if (live.currentQuestion != null)
-              QuestionCard(
-                key: ValueKey(live.currentQuestion!.id),
-                controller: widget.controller,
-                classroom: live,
-                question: live.currentQuestion!,
-              ),
-            if (live.questions.isNotEmpty) ...[
-              const Divider(height: 32),
-              Text('课堂题目', style: Theme.of(context).textTheme.titleMedium),
-              for (final question in live.questions.values)
-                ExpansionTile(
-                  title: Text(
-                    '${question.typeLabel} · ${live.answers.containsKey(question.id)
-                        ? '已提交'
-                        : live.answersKnown
-                        ? '暂无作答记录'
-                        : '状态未同步'}',
-                  ),
-                  subtitle: live.autoStates[question.id] == null
-                      ? null
-                      : Text(live.autoStates[question.id]!),
+        body: LayoutBuilder(
+          builder: (context, constraints) => useWideClassroom(constraints)
+              ? _wideLive(live, constraints)
+              : ListView(
+                  padding: const EdgeInsets.all(16),
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: QuestionCard(
-                        key: ValueKey('list-${question.id}'),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: StatusLine(
+                            icon: live.ended
+                                ? Icons.stop_circle_outlined
+                                : Icons.sensors,
+                            text: live.ended ? '课堂已结束' : live.connectionLabel,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          onPressed: _locationBusy || live.ended
+                              ? null
+                              : _checkin,
+                          icon: const Icon(Icons.location_on_outlined),
+                          label: Text(
+                            _locationBusy
+                                ? '签到中…'
+                                : live.location?.signed == true
+                                ? '位置已签到'
+                                : '位置签到',
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    StatusLine(
+                      icon: Icons.how_to_reg_outlined,
+                      text: '本节签到：${live.checkinText}',
+                    ),
+                    if (live.attendanceError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          live.attendanceError!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    if (_locationMessage != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(_locationMessage!),
+                      ),
+                    if (live.error != null)
+                      Text(
+                        live.error!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    if (widget.controller.backgroundWarning != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          widget.controller.backgroundWarning!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    if (live.answerSyncError != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          '作答状态未能同步：${live.answerSyncError}',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    if (_exporting)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: Center(
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    if (presentation != null) ...[
+                      Text(
+                        presentation.title,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('跟随教师翻页'),
+                        value: live.followTeacher,
+                        onChanged: (value) =>
+                            widget.controller.followTeacher(live, value),
+                      ),
+                    ],
+                    if (slide != null)
+                      SlideImage(slide)
+                    else
+                      const SizedBox(
+                        height: 200,
+                        child: Center(child: Text('等待教师展示课件')),
+                      ),
+                    if (presentation != null && presentation.slides.isNotEmpty)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            tooltip: '上一页',
+                            onPressed: live.slideIndex > 0
+                                ? () => widget.controller.selectSlide(
+                                    live,
+                                    live.slideIndex - 1,
+                                  )
+                                : null,
+                            icon: const Icon(Icons.chevron_left),
+                          ),
+                          Text(
+                            '${live.slideIndex + 1} / ${presentation.slides.length}',
+                          ),
+                          IconButton(
+                            tooltip: '下一页',
+                            onPressed:
+                                live.slideIndex + 1 < presentation.slides.length
+                                ? () => widget.controller.selectSlide(
+                                    live,
+                                    live.slideIndex + 1,
+                                  )
+                                : null,
+                            icon: const Icon(Icons.chevron_right),
+                          ),
+                        ],
+                      ),
+                    if (live.currentQuestion != null)
+                      QuestionCard(
+                        key: ValueKey(live.currentQuestion!.id),
                         controller: widget.controller,
                         classroom: live,
-                        question: question,
+                        question: live.currentQuestion!,
                       ),
-                    ),
+                    if (live.questions.isNotEmpty) ...[
+                      const Divider(height: 32),
+                      Text(
+                        '课堂题目',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      for (final question in live.questions.values)
+                        ExpansionTile(
+                          title: Text(
+                            '${question.typeLabel} · ${live.answers.containsKey(question.id)
+                                ? '已提交'
+                                : live.answersKnown
+                                ? '暂无作答记录'
+                                : '状态未同步'}',
+                          ),
+                          subtitle: live.autoStates[question.id] == null
+                              ? null
+                              : Text(live.autoStates[question.id]!),
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: QuestionCard(
+                                key: ValueKey('list-${question.id}'),
+                                controller: widget.controller,
+                                classroom: live,
+                                question: question,
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
                   ],
                 ),
-            ],
-          ],
         ),
       );
     },

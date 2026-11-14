@@ -66,6 +66,9 @@ foreach ($runtime in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
     }
 }
 
+& python (Join-Path $repoRoot 'scripts/integrity/generate.py') --root $BuildDir --platform windows
+if ($LASTEXITCODE -ne 0) { throw 'Could not generate the runtime integrity inventory.' }
+
 if (-not $InnoSetupCompiler) {
     $candidates = @(
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'),

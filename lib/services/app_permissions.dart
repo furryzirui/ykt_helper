@@ -30,9 +30,7 @@ class AppPermissions {
         for (final permission in AppPermission.values)
           AppPermissionState(
             permission: permission,
-            status:
-                defaultTargetPlatform == TargetPlatform.windows &&
-                    permission == AppPermission.photos
+            status: defaultTargetPlatform == TargetPlatform.windows
                 ? PermissionStatus.notRequired
                 : PermissionStatus.unsupported,
           ),
@@ -44,10 +42,15 @@ class AppPermissions {
         for (final permission in AppPermission.values)
           AppPermissionState(
             permission: permission,
-            status: PermissionStatus.values.firstWhere(
-              (status) => status.name == values?[permission.name],
-              orElse: () => throw const ApiFailure('无法读取应用权限状态，请重试'),
-            ),
+            status:
+                defaultTargetPlatform == TargetPlatform.iOS &&
+                    permission == AppPermission.battery &&
+                    values?[permission.name] == 'unsupported'
+                ? PermissionStatus.notRequired
+                : PermissionStatus.values.firstWhere(
+                    (status) => status.name == values?[permission.name],
+                    orElse: () => throw const ApiFailure('无法读取应用权限状态，请重试'),
+                  ),
           ),
       ];
     } on PlatformException catch (error) {

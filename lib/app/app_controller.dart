@@ -5,7 +5,6 @@ import 'dart:ui' show Rect;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../data/live_connection.dart';
 import '../data/rain_api.dart';
 import '../data/secure_store.dart';
@@ -14,6 +13,7 @@ import '../services/ai_answer.dart';
 import '../services/app_logs.dart';
 import '../services/background_runtime.dart';
 import '../services/gallery_saver.dart';
+import '../services/file_export.dart';
 import '../services/slide_export.dart';
 
 class _AutomaticSubmission {
@@ -99,6 +99,17 @@ class AppController extends ChangeNotifier {
   bool busy = false, initialized = false, _disposed = false;
   String? error, backgroundWarning;
   bool get backgroundEnabled => background.enabled;
+  bool get backgroundSupported => background.supported;
+  // Naming used by the settings pages: this is an Android system service,
+  // while Windows keeps automation in its ordinary desktop process.
+  bool get systemServiceSupported => backgroundSupported;
+  bool get serviceSupported => backgroundSupported;
+  bool get backgroundBusy => background.busy;
+  // These controls are intentionally process-local. An explicit off action
+  // wins over auto-start until the user explicitly turns the service on again.
+  bool _serviceManuallyDisabled = false;
+  bool _serviceManuallyEnabled = false;
+  int _backgroundRevision = 0;
   Timer? _poller;
   int _generation = 0;
   Future<void> _writes = Future.value();
@@ -225,6 +236,7 @@ class AppController extends ChangeNotifier {
   Future<void> logout() async {
     logs.add(AppLogEvent.logout);
     _generation++;
+    _backgroundRevision++;
     final previous = account;
     account = null;
     for (final live in classrooms.values) {
@@ -242,6 +254,7 @@ class AppController extends ChangeNotifier {
     await store.delete('cookies');
     if (previous != null) await store.delete('answers:${previous.id}');
     await background.setEnabled(false);
+    _serviceManuallyEnabled = false;
     backgroundWarning = null;
     _notify();
   }
@@ -321,6 +334,11 @@ class AppController extends ChangeNotifier {
       throw const ApiFailure('提交延迟请输入 1–3600 秒');
     }
     final candidate = AppSettings.fromJson((next ?? settings).toJson());
+    // Auto-start has no useful meaning without an automation trigger. This
+    // normalization also lets users turn the last automation off cleanly.
+    if (!candidate.autoEnter && !candidate.autoAnswer) {
+      candidate.autoStartService = false;
+    }
     if (candidate.autoAnswer) {
       if (candidate.answerMode == AnswerMode.fixed &&
           candidate.fixedAnswer.trim().isEmpty) {
@@ -354,13 +372,34 @@ class AppController extends ChangeNotifier {
 
   Future<void> retryBackground() => _updateBackground();
 
+  /// Explicitly enables or disables the classroom service from Settings.
+  /// Disabling it suppresses auto-start until an explicit re-enable, so
+  /// refreshes and classroom events cannot surprise the user by restarting it.
+  Future<void> setSystemService(bool enabled) async {
+    if (!backgroundSupported) return;
+    if (enabled && !(settings.autoEnter || settings.autoAnswer)) {
+      throw const ApiFailure('请先开启至少一项自动化');
+    }
+    _serviceManuallyDisabled = !enabled;
+    _serviceManuallyEnabled = enabled;
+    _notify();
+    await _updateBackground();
+  }
+
   Future<void> _updateBackground() async {
+    if (_disposed) return;
+    final revision = ++_backgroundRevision;
+    final hasAutomation = settings.autoEnter || settings.autoAnswer;
+    if (!hasAutomation) _serviceManuallyEnabled = false;
+    final autoRequested = settings.autoStartService && hasAutomation;
     final needed =
         account != null &&
-        (settings.autoEnter ||
-            settings.autoAnswer ||
-            classrooms.values.any((live) => !live.ended));
+        backgroundSupported &&
+        hasAutomation &&
+        !_serviceManuallyDisabled &&
+        (_serviceManuallyEnabled || autoRequested);
     final okay = await background.setEnabled(needed);
+    if (_disposed || revision != _backgroundRevision) return;
     final previousWarning = backgroundWarning;
     backgroundWarning = needed && !okay
         ? defaultTargetPlatform == TargetPlatform.iOS
@@ -1315,11 +1354,14 @@ class AppController extends ChangeNotifier {
   }) async {
     await _logged(AppLogEvent.export, () async {
       final file = await SlideExporter(loadImage).export(deck, pptx: pptx);
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path)],
-          sharePositionOrigin: sharePositionOrigin,
-        ),
+      await FileExport().deliver(
+        file,
+        suggestedName: file.uri.pathSegments.last,
+        extension: pptx ? 'pptx' : 'zip',
+        mimeType: pptx
+            ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+            : 'application/zip',
+        sharePositionOrigin: sharePositionOrigin,
       );
     });
   }
