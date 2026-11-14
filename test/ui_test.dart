@@ -818,48 +818,120 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('类型6判断题按单选选项提交', (tester) async {
+  for (final originalType in [1, 2, 3, 6]) {
+    testWidgets('两个选项的原类型$originalType题显示判断并按单选提交', (tester) async {
+      final controller = _UiController(), live = _classroom();
+      final question = Question(
+        id: 'judgement',
+        body: '两个选项的题',
+        type: originalType,
+        selectionLimit: 2,
+        options: const {'A': '同意', 'B': '暂不确定'},
+        dt: DateTime.now().millisecondsSinceEpoch,
+        limit: 60,
+      );
+      live.activeProblemIds.add(question.id);
+      live.answersKnown = true;
+      live.draftAnswers[question.id] = ['A', 'B'];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: QuestionCard(
+                controller: controller,
+                classroom: live,
+                question: question,
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('判断题'), findsOneWidget);
+      expect(find.text('最多选择 2 项'), findsNothing);
+      expect(find.byType(CheckboxListTile), findsNWidgets(2));
+      expect(
+        tester
+            .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+            .where((option) => option.value == true),
+        hasLength(1),
+      );
+      await tester.tap(find.byType(CheckboxListTile).at(1));
+      await tester.pump();
+      expect(
+        tester
+            .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(0))
+            .value,
+        isFalse,
+      );
+      expect(
+        tester
+            .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(1))
+            .value,
+        isTrue,
+      );
+      await tester.tap(find.text('提交答案'));
+      await tester.pump();
+      expect(controller.submittedAnswer, ['B']);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    });
+  }
+
+  testWidgets('同题选项缩减为判断题时清除失效选择并阻止提交旧选项', (tester) async {
     final controller = _UiController(), live = _classroom();
-    final question = Question(
-      id: 'judgement',
-      body: '判断题',
-      type: 6,
-      options: const {'A': '正确', 'B': '错误'},
-      dt: DateTime.now().millisecondsSinceEpoch,
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    Question question(Map<String, String> options) => Question(
+      id: 'changing-options',
+      body: '选项同步后的题目',
+      type: 2,
+      options: options,
+      dt: timestamp,
       limit: 60,
     );
-    live.activeProblemIds.add(question.id);
+    live.activeProblemIds.add('changing-options');
     live.answersKnown = true;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: QuestionCard(
-              controller: controller,
-              classroom: live,
-              question: question,
-            ),
+    live.draftAnswers['changing-options'] = ['C'];
+    Widget view(Question current) => MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: QuestionCard(
+            key: const ValueKey('changing-options'),
+            controller: controller,
+            classroom: live,
+            question: current,
           ),
         ),
       ),
     );
-    expect(find.byType(CheckboxListTile), findsNWidgets(2));
-    await tester.tap(find.byType(CheckboxListTile).at(0));
-    await tester.pump();
-    await tester.tap(find.byType(CheckboxListTile).at(1));
-    await tester.pump();
-    expect(
-      tester
-          .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(0))
-          .value,
-      isFalse,
+
+    await tester.pumpWidget(
+      view(question(const {'A': '选项一', 'B': '选项二', 'C': '选项三'})),
     );
     expect(
       tester
-          .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(1))
+          .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(2))
           .value,
       isTrue,
     );
+
+    // The unchanged draft fingerprint must not retain a key absent from the
+    // current question, even though the same QuestionCard State is reused.
+    await tester.pumpWidget(view(question(const {'A': '选项一', 'B': '选项二'})));
+    expect(find.text('判断题'), findsOneWidget);
+    expect(find.byType(CheckboxListTile), findsNWidgets(2));
+    expect(
+      tester
+          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+          .every((option) => option.value == false),
+      isTrue,
+    );
+    await tester.tap(find.text('提交答案'));
+    await tester.pump();
+    expect(find.text('请选择答案'), findsOneWidget);
+    expect(controller.submittedAnswer, isNull);
+
+    await tester.tap(find.byType(CheckboxListTile).at(1));
+    await tester.pump();
     await tester.tap(find.text('提交答案'));
     await tester.pump();
     expect(controller.submittedAnswer, ['B']);

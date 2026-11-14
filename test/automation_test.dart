@@ -144,7 +144,7 @@ void main() {
     id: 'q',
     body: '1 + 1?',
     type: 1,
-    options: {'A': '2', 'B': '3'},
+    options: {'A': '2', 'B': '3', 'C': '4'},
   );
   Json hello([List<Json> timeline = const []]) => {
     'op': 'hello',
@@ -241,7 +241,7 @@ void main() {
               id: 'q',
               body: '题目',
               type: type,
-              options: const {'A': '甲', 'B': '乙'},
+              options: const {'A': '甲', 'B': '乙', 'C': '丙'},
               selectionLimit: 2,
               blankCount: 2,
             ),
@@ -295,6 +295,46 @@ void main() {
       expect(api.submittedAnswers.single, [content, content, content]);
     },
   );
+
+  for (final type in [1, 2, 3]) {
+    test(
+      'two options use the judgment fixed answer for protocol $type',
+      () async {
+        controller.settings = AppSettings(
+          autoAnswer: true,
+          fixedSingleAnswer: 'D',
+          fixedMultipleAnswer: 'AC',
+          fixedJudgmentAnswer: 'B',
+        );
+        api.decks['p'] = Presentation(
+          id: 'p',
+          title: '两选项',
+          slides: [
+            Slide(
+              id: 's1',
+              index: 0,
+              imageUrl: '',
+              question: Question(
+                id: 'q',
+                body: '两选项',
+                type: type,
+                selectionLimit: 2,
+                options: const {'A': '甲', 'B': '乙'},
+              ),
+            ),
+          ],
+        );
+        final live = await controller.enter(lesson);
+        await controller.processEvent(live, hello());
+        await controller.syncAnswers(live);
+        await controller.processEvent(live, unlock());
+        await Future<void>.delayed(Duration.zero);
+        expect(live.draftAnswers['q'], ['B']);
+        expect(live.autoStates['q'], '答案已填充，待确认提交');
+        expect(api.submissions, 0);
+      },
+    );
+  }
 
   test('empty fixed category skips without borrowing another answer', () async {
     controller.settings = AppSettings(

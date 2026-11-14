@@ -4,7 +4,12 @@ import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/ui/app.dart';
 import 'package:ykt_helper/ui/widgets.dart';
 
-const _question = Question(id: 'q', body: '题目', type: 1);
+const _question = Question(
+  id: 'q',
+  body: '题目',
+  type: 1,
+  options: {'A': '甲', 'B': '乙', 'C': '丙'},
+);
 const _plain = Slide(id: 'plain', index: 0, imageUrl: '');
 
 Future<void> _show(
@@ -66,12 +71,36 @@ void main() {
         );
         expect(find.text(_question.typeLabel), findsOneWidget);
         expect(find.byIcon(Icons.quiz_outlined), findsOneWidget);
-        expect(find.bySemanticsLabel('第 8 页，含题目，单选 / 判断'), findsOneWidget);
+        expect(find.bySemanticsLabel('第 8 页，含题目，单选题'), findsOneWidget);
         await tester.tap(find.byType(SlideThumbnail));
         expect(taps, 1);
         expect(tester.takeException(), isNull);
       },
     );
+  }
+
+  for (final type in [1, 2, 3]) {
+    testWidgets('two-option protocol type $type is marked as judgment', (
+      tester,
+    ) async {
+      await _show(
+        tester,
+        slide: Slide(
+          id: 'judgment-$type',
+          index: 7,
+          imageUrl: '',
+          question: Question(
+            id: 'j',
+            type: type,
+            body: '题目',
+            options: const {'A': '甲', 'B': '乙'},
+          ),
+        ),
+      );
+      expect(find.text('判断题'), findsOneWidget);
+      expect(find.bySemanticsLabel('第 8 页，含题目，判断题'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets('answer record alone identifies a question page', (tester) async {

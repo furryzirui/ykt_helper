@@ -288,13 +288,32 @@ void main() {
           id: 'q',
           body: '',
           type: 1,
-          options: {'A': 'a', 'B': 'b'},
+          options: {'A': 'a', 'B': 'b', 'C': 'c'},
         ),
       ),
       throwsA(isA<ApiFailure>()),
     );
     expect(AiAnswerService.parse('甲', q), ['A']);
   });
+  for (final type in [1, 2, 3]) {
+    test('two-option type $type uses judgment single-choice parsing', () {
+      final question = Question(
+        id: 'two-$type',
+        type: type,
+        body: '任意两个选项',
+        selectionLimit: 2,
+        options: const {'A': '甲', 'B': '乙'},
+      );
+      expect(question.isJudgment, isTrue);
+      expect(question.typeLabel, '判断题');
+      expect(AiAnswerService.parse('A', question), ['A']);
+      expect(AiAnswerService.parse('乙', question), ['B']);
+      expect(
+        () => AiAnswerService.parse('AB', question),
+        throwsA(isA<ApiFailure>()),
+      );
+    });
+  }
   test('fill blanks enforce count; subjective answers stay structured', () {
     expect(
       AiAnswerService.parse(

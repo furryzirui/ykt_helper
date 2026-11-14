@@ -707,7 +707,12 @@ class _QuestionCardState extends State<QuestionCard> {
   String? _error;
   String? _appliedDraft;
   Timer? _timer;
-  bool get _optionQuestion => [1, 2, 3, 6].contains(widget.question.type);
+  bool get _optionQuestion =>
+      widget.question.isJudgment || [1, 2, 3, 6].contains(widget.question.type);
+  bool get _multipleOptionQuestion =>
+      !widget.question.isJudgment &&
+      (widget.question.type == 2 ||
+          widget.question.type == 3 && widget.question.selectionLimit > 1);
   @override
   void initState() {
     super.initState();
@@ -724,6 +729,13 @@ class _QuestionCardState extends State<QuestionCard> {
   void didUpdateWidget(covariant QuestionCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     _readDraft();
+    _choice.removeWhere((key) => !widget.question.options.containsKey(key));
+    if (!_multipleOptionQuestion && _choice.length > 1) {
+      final first = _choice.first;
+      _choice
+        ..clear()
+        ..add(first);
+    }
   }
 
   void _readDraft() {
@@ -736,11 +748,12 @@ class _QuestionCardState extends State<QuestionCard> {
     if (_appliedDraft == fingerprint) return;
     _appliedDraft = fingerprint;
     if (_optionQuestion && draft is List) {
+      final selections = draft
+          .map(domain.str)
+          .where(widget.question.options.containsKey);
       _choice
         ..clear()
-        ..addAll(
-          draft.map(domain.str).where(widget.question.options.containsKey),
-        );
+        ..addAll(_multipleOptionQuestion ? selections : selections.take(1));
     } else if (widget.question.type == 4 && draft is List) {
       for (var i = 0; i < _blanks.length; i++) {
         _blanks[i].text = i < draft.length ? domain.str(draft[i]) : '';
@@ -900,7 +913,7 @@ class _QuestionCardState extends State<QuestionCard> {
                   padding: EdgeInsets.symmetric(vertical: 8),
                   child: Text('当前不在答题时间内'),
                 ),
-              if (question.type == 3 && question.selectionLimit > 1)
+              if (question.type == 3 && _multipleOptionQuestion)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Text('最多选择 ${question.selectionLimit} 项'),
@@ -914,13 +927,10 @@ class _QuestionCardState extends State<QuestionCard> {
                     onChanged: active && !_submitting
                         ? (selected) {
                             setState(() {
-                              final multiple =
-                                  question.type == 2 ||
-                                  question.type == 3 &&
-                                      question.selectionLimit > 1;
-                              if (!multiple) _choice.clear();
+                              if (!_multipleOptionQuestion) _choice.clear();
                               if (selected == true) {
-                                if (question.type == 3 &&
+                                if (_multipleOptionQuestion &&
+                                    question.type == 3 &&
                                     _choice.length >= question.selectionLimit) {
                                   _error = '最多选择 ${question.selectionLimit} 项';
                                   return;
@@ -935,7 +945,7 @@ class _QuestionCardState extends State<QuestionCard> {
                           }
                         : null,
                   ),
-              if (question.type == 4)
+              if (!_optionQuestion && question.type == 4)
                 for (var i = 0; i < _blanks.length; i++)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 6),
@@ -946,7 +956,7 @@ class _QuestionCardState extends State<QuestionCard> {
                       onChanged: (_) => _draftEdited(),
                     ),
                   ),
-              if (question.type == 5) ...[
+              if (!_optionQuestion && question.type == 5) ...[
                 TextField(
                   controller: _text,
                   enabled: active && !_submitting,

@@ -499,6 +499,41 @@ void main() {
     controller.dispose();
   });
 
+  for (final type in [1, 2, 3]) {
+    testWidgets('横屏回顾将两选项协议$type显示为判断题', (tester) async {
+      final controller = _Controller()
+        ..reviewSlides = [
+          Slide(
+            id: 'two-options',
+            index: 0,
+            imageUrl: '',
+            question: Question(
+              id: 'judgment',
+              type: type,
+              body: '两个选项',
+              options: const {'A': '甲', 'B': '乙'},
+              selectionLimit: 2,
+            ),
+          ),
+        ];
+      await _mount(
+        tester,
+        LessonDetailPage(controller: controller, lesson: _lesson),
+        const Size(1280, 800),
+        1,
+      );
+      final preview = find.byKey(const ValueKey('review-thumbnail-0'));
+      expect(
+        find.descendant(of: preview, matching: find.text('判断题')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('review-wide-layout')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    });
+  }
+
   testWidgets('竖屏仍逐页保存且下载菜单不增加单页入口', (tester) async {
     final controller = _Controller();
     await _mount(

@@ -116,4 +116,50 @@ void main() {
       isNull,
     );
   });
+
+  test(
+    'every two-option question uses the independent judgment preference',
+    () {
+      final settings = AppSettings(
+        fixedSingleAnswer: 'D',
+        fixedMultipleAnswer: 'AC',
+        fixedJudgmentAnswer: 'B',
+      );
+      for (final type in [1, 2, 3, 6]) {
+        final question = Question(
+          id: 'q',
+          body: '',
+          type: type,
+          options: const {'A': '甲', 'B': '乙'},
+        );
+        expect(question.isJudgment, true);
+        expect(question.typeLabel, '判断题');
+        expect(settings.fixedAnswerFor(question), 'B');
+      }
+      const regular = Question(
+        id: 'q',
+        body: '',
+        type: 1,
+        options: {'A': '甲', 'B': '乙', 'C': '丙'},
+      );
+      expect(regular.isJudgment, false);
+      expect(settings.fixedAnswerFor(regular), 'D');
+    },
+  );
+
+  test(
+    'judgment preference follows explicit right-wrong labels even when reversed',
+    () {
+      final settings = AppSettings();
+      const reversed = Question(
+        id: 'q',
+        body: '',
+        type: 1,
+        options: {'A': '<p>错误</p>', 'B': '<p>正确</p>'},
+      );
+      expect(settings.fixedAnswerFor(reversed), 'B');
+      settings.fixedJudgmentAnswer = 'B';
+      expect(settings.fixedAnswerFor(reversed), 'A');
+    },
+  );
 }

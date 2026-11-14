@@ -1342,7 +1342,9 @@ class AppController extends ChangeNotifier {
           continue;
         }
         final parsed =
-            snapshot.answerMode == AnswerMode.fixed && question.type == 4
+            snapshot.answerMode == AnswerMode.fixed &&
+                question.type == 4 &&
+                !question.isJudgment
             ? List<String>.filled(question.blankCount, result)
             : AiAnswerService.parse(result, question);
         // An official client may have submitted while AI was running.

@@ -140,15 +140,19 @@ class Question {
         limit: seconds,
         serverOffsetMillis: serverOffsetMillis ?? this.serverOffsetMillis,
       );
-  String get typeLabel => switch (type) {
-    1 => '单选 / 判断',
-    2 => '多选',
-    3 => '投票',
-    4 => '填空',
-    5 => '主观题',
-    6 => '判断题',
-    _ => '题目',
-  };
+  bool get isJudgment => type == 6 || options.length == 2;
+
+  String get typeLabel => isJudgment
+      ? '判断题'
+      : switch (type) {
+          1 => '单选题',
+          2 => '多选',
+          3 => '投票',
+          4 => '填空',
+          5 => '主观题',
+          6 => '判断题',
+          _ => '题目',
+        };
   String get promptText =>
       [body, ...options.entries.map((e) => '${e.key}. ${e.value}')].join('\n');
 }
@@ -337,13 +341,44 @@ class AppSettings {
         fixedSubjectiveAnswer = value;
   }
 
-  String? fixedAnswerFor(Question question) => switch (question.type) {
-    1 => fixedSingleAnswer,
-    2 || 3 => fixedMultipleAnswer,
-    6 => fixedJudgmentAnswer,
-    4 || 5 => fixedSubjectiveAnswer,
-    _ => null,
-  };
+  String? fixedAnswerFor(Question question) {
+    if (question.isJudgment) {
+      if (!const ['A', 'B'].contains(fixedJudgmentAnswer)) {
+        return fixedJudgmentAnswer;
+      }
+      if (question.options.length == 2) {
+        final labels = question.options.map(
+          (key, value) => MapEntry(
+            key,
+            value
+                .replaceAll(RegExp(r'<[^>]*>'), '')
+                .replaceAll('&nbsp;', ' ')
+                .trim(),
+          ),
+        );
+        for (final pair in const [
+          ['正确', '错误'],
+          ['对', '错'],
+        ]) {
+          if (labels.values.contains(pair[0]) &&
+              labels.values.contains(pair[1])) {
+            final label = fixedJudgmentAnswer == 'A' ? pair[0] : pair[1];
+            return labels.entries
+                .singleWhere((entry) => entry.value == label)
+                .key;
+          }
+        }
+      }
+      return fixedJudgmentAnswer;
+    }
+    return switch (question.type) {
+      1 => fixedSingleAnswer,
+      2 || 3 => fixedMultipleAnswer,
+      6 => fixedJudgmentAnswer,
+      4 || 5 => fixedSubjectiveAnswer,
+      _ => null,
+    };
+  }
 
   bool get hasCompleteFixedAnswers => [
     fixedSingleAnswer,

@@ -220,7 +220,7 @@ class AiAnswerService {
         .replaceAll(RegExp(r'^```(?:json|text)?\s*|\s*```$'), '')
         .trim();
     if (value.isEmpty) throw const ApiFailure('答案内容为空');
-    if (question.type >= 1 && question.type <= 3 || question.type == 6) {
+    if (question.type >= 1 && question.type <= 3 || question.isJudgment) {
       final keys = question.options.keys.toList();
       if (keys.isEmpty) throw const ApiFailure('题目选项尚未加载，未自动提交');
       final normalized = value.toUpperCase().replaceFirst(
@@ -245,7 +245,7 @@ class AiAnswerService {
       );
       if (combined.isEmpty ||
           remainder.isNotEmpty ||
-          ((question.type == 1 || question.type == 6) &&
+          ((question.type == 1 || question.isJudgment) &&
               combined.length != 1) ||
           (question.type == 3 && combined.length > question.selectionLimit)) {
         throw const ApiFailure('答案无法明确匹配选项，未自动提交');
