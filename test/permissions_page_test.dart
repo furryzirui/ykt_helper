@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/services/app_permissions.dart';
@@ -10,6 +11,7 @@ class _Permissions extends AppPermissions {
     AppPermission.notifications: PermissionStatus.granted,
     AppPermission.photos: PermissionStatus.notRequired,
     AppPermission.battery: PermissionStatus.denied,
+    AppPermission.autostart: PermissionStatus.needsConfirmation,
   };
   final opened = <AppPermission>[];
   final requested = <AppPermission>[];
@@ -81,6 +83,44 @@ Future<void> _gate(
 }
 
 void main() {
+  testWidgets('厂商自启动状态需人工确认，跳转前解释且不假设已授权', (tester) async {
+    final permissions = _Permissions();
+    await _show(tester, permissions);
+    expect(find.text('需在系统设置中确认'), findsOneWidget);
+    await tester.ensureVisible(_row('自启动'));
+    await tester.tap(_row('自启动'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Android 无法统一读取厂商的自启动授权状态'), findsOneWidget);
+    expect(permissions.opened, isEmpty);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(permissions.opened, isEmpty);
+    await tester.tap(_row('自启动'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('前往设置'));
+    await tester.pumpAndSettle();
+    expect(permissions.opened, [AppPermission.autostart]);
+    expect(permissions.requested, isEmpty);
+    expect(find.text('需在系统设置中确认'), findsOneWidget);
+  });
+
+  testWidgets('Windows相机暂不支持，与无需授权分别显示', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final permissions = _Permissions();
+    permissions.states[AppPermission.camera] = PermissionStatus.unsupported;
+    await _show(tester, permissions);
+    expect(
+      find.descendant(of: _row('相机'), matching: find.text('暂不支持')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: _row('保存到相册'), matching: find.text('无需授权')),
+      findsOneWidget,
+    );
+    expect(tester.widget<ListTile>(_row('相机')).onTap, isNull);
+  });
+
   testWidgets('shows actual statuses; modern album needs no permission', (
     tester,
   ) async {
@@ -104,9 +144,9 @@ void main() {
       permissions.states[permission] = PermissionStatus.notRequired;
     }
     await _show(tester, permissions);
-    expect(find.text('无需授权'), findsNWidgets(4));
+    expect(find.text('无需授权'), findsNWidgets(5));
     expect(find.text('暂不支持'), findsNothing);
-    for (final name in ['相机', '通知', '保存到相册', '电池优化']) {
+    for (final name in ['相机', '通知', '保存到相册', '电池优化', '自启动']) {
       expect(tester.widget<ListTile>(_row(name)).onTap, isNull);
       await tester.tap(_row(name));
     }
@@ -178,7 +218,7 @@ void main() {
       permissions.states[AppPermission.camera] = PermissionStatus.granted;
       await tester.tap(find.text('重试'));
       await tester.pumpAndSettle();
-      expect(find.byType(ListTile), findsNWidgets(4));
+      expect(find.byType(ListTile), findsNWidgets(5));
       expect(find.text('无法读取应用权限，请重试'), findsNothing);
     },
   );
@@ -194,7 +234,7 @@ void main() {
     await tester.tap(find.text('继续授权'));
     await tester.pumpAndSettle();
     expect(find.text('无法打开系统设置，请在系统设置中找到本应用后调整权限'), findsOneWidget);
-    expect(find.byType(ListTile), findsNWidgets(4));
+    expect(find.byType(ListTile), findsNWidgets(5));
     expect(find.textContaining('system failure'), findsNothing);
   });
 

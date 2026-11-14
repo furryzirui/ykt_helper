@@ -1,9 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/rain_api.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
+import 'package:ykt_helper/services/app_autostart.dart';
 
 class _Store implements KeyValueStore {
   @override
@@ -44,6 +46,17 @@ class _Api extends RainApi {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          AppAutostart.channel,
+          (MethodCall _) async => null,
+        );
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(AppAutostart.channel, null);
+  });
 
   test(
     'auto-start setting is persisted without a system service preference',

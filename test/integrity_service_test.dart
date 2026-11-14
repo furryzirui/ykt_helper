@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ykt_helper/domain/app_info.dart';
 import 'package:ykt_helper/services/integrity_service.dart';
 
 void main() {
@@ -65,8 +66,8 @@ void main() {
       'schema': 1,
       'app': 'ykt_helper',
       'platform': 'windows',
-      'version': '1.0.1',
-      'build': 6,
+      'version': AppInfo.version,
+      'build': AppInfo.buildNumber,
       'files': [
         {'path': 'ykt_helper.exe', 'algorithm': 'sha256', 'sha256': '0' * 64},
       ],
@@ -103,8 +104,8 @@ void main() {
           'schema': 1,
           'app': 'ykt_helper',
           'platform': 'windows',
-          'version': '1.0.1',
-          'build': 6,
+          'version': AppInfo.version,
+          'build': AppInfo.buildNumber,
           'files': [
             {'path': 'ykt_helper.exe', 'algorithm': 'sha256', 'sha256': digest},
           ],

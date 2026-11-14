@@ -3,12 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/services/app_permissions.dart';
+import 'package:ykt_helper/services/app_autostart.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const permissionChannel = MethodChannel('ykt_helper/app_permissions');
-  const backgroundChannel = MethodChannel('flutter_background');
+  const backgroundChannel = MethodChannel('ykt_helper/background_runtime');
   const legacyChannel = MethodChannel('ykt_helper/runtime_permissions');
   const permissions = AppPermissions();
   final messenger =
@@ -28,6 +29,14 @@ void main() {
       legacyPermissionCalls++;
       return true;
     });
+    messenger.setMockMethodCallHandler(
+      AppAutostart.channel,
+      (_) async => {
+        'enabled': false,
+        'suspended': false,
+        'permission': 'denied',
+      },
+    );
   });
   tearDown(() {
     debugDefaultTargetPlatformOverride = null;
@@ -35,6 +44,7 @@ void main() {
       permissionChannel,
       backgroundChannel,
       legacyChannel,
+      AppAutostart.channel,
     ]) {
       messenger.setMockMethodCallHandler(channel, null);
     }
@@ -48,6 +58,7 @@ void main() {
     'notifications': notifications,
     'photos': 'notRequired',
     'battery': battery,
+    'autostart': 'needsConfirmation',
   };
 
   test(
@@ -65,6 +76,7 @@ void main() {
         PermissionStatus.granted,
         PermissionStatus.notRequired,
         PermissionStatus.granted,
+        PermissionStatus.needsConfirmation,
       ]);
       expect(methods, ['check']);
       expect(legacyPermissionCalls, 0);
@@ -166,13 +178,19 @@ void main() {
       messenger.setMockMethodCallHandler(permissionChannel, (call) async {
         methods.add(call.method);
         if (call.method == 'check') {
-          return {...state(), 'photos': 'denied', 'battery': 'unsupported'};
+          return {
+            ...state(),
+            'photos': 'denied',
+            'battery': 'unsupported',
+            'autostart': 'unsupported',
+          };
         }
         expect((call.arguments as Map)['permission'], 'photos');
         return true;
       });
       final result = await permissions.check();
-      expect(result.last.status, PermissionStatus.notRequired);
+      expect(result[3].status, PermissionStatus.notRequired);
+      expect(result.last.status, PermissionStatus.unsupported);
       expect(result[2].status, PermissionStatus.denied);
       expect(await permissions.request(AppPermission.photos), isTrue);
       expect(methods, ['check', 'request']);
@@ -188,10 +206,8 @@ void main() {
           .status,
       PermissionStatus.notRequired,
     );
-    expect(
-      states.every((state) => state.status == PermissionStatus.notRequired),
-      isTrue,
-    );
+    expect(states.first.status, PermissionStatus.unsupported);
+    expect(states.last.status, PermissionStatus.denied);
   });
 
   test(
@@ -246,7 +262,8 @@ void main() {
         final runtime = BackgroundRuntime();
         expect(await runtime.setEnabled(true), isFalse);
         expect(runtime.enabled, isFalse);
-        expect(calls, isEmpty);
+        expect(calls.last.method, 'setEnabled');
+        expect(calls.last.arguments, {'enabled': false});
       }
       expect(legacyPermissionCalls, 0);
     },
@@ -259,13 +276,14 @@ void main() {
         throw PlatformException(code: 'permission_check_failed');
       });
       expect(await BackgroundRuntime().setEnabled(true), isFalse);
-      expect(calls, isEmpty);
+      expect(calls.single.method, 'setEnabled');
+      expect(calls.single.arguments, {'enabled': false});
       expect(legacyPermissionCalls, 0);
     },
   );
 
   test(
-    'granted background gate disables plugin prompts and reacts to revocation',
+    'granted gate calls only the runtime service and reacts to revocation',
     () async {
       var response = state();
       final permissionMethods = <String>[];
@@ -276,19 +294,48 @@ void main() {
       final runtime = BackgroundRuntime();
       expect(await runtime.setEnabled(true), isTrue);
       expect(runtime.enabled, isTrue);
-      expect(calls.map((call) => call.method), [
-        'initialize',
-        'enableBackgroundExecution',
-      ]);
+      expect(calls.map((call) => call.method), ['setEnabled']);
       final config = calls.first.arguments as Map;
-      expect(config['android.shouldRequestBatteryOptimizationsOff'], isFalse);
-      expect(config['android.notificationImportance'], 2);
+      expect(config, {'enabled': true});
       response = state(notifications: 'denied');
       expect(await runtime.setEnabled(true), isFalse);
       expect(runtime.enabled, isFalse);
-      expect(calls.last.method, 'disableBackgroundExecution');
+      expect(calls.last.method, 'setEnabled');
+      expect(calls.last.arguments, {'enabled': false});
       expect(permissionMethods, ['check', 'check']);
       expect(legacyPermissionCalls, 0);
     },
   );
+
+  test(
+    'stops an already native-started service before Dart has enabled it',
+    () async {
+      final runtime = BackgroundRuntime();
+      expect(runtime.enabled, isFalse);
+      expect(await runtime.setEnabled(false), isTrue);
+      expect(calls.single.method, 'setEnabled');
+      expect(calls.single.arguments, {'enabled': false});
+    },
+  );
+
+  test('Windows unknown StartupApps status remains unverified', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    messenger.setMockMethodCallHandler(
+      AppAutostart.channel,
+      (_) async => {'enabled': false, 'permission': 'needsConfirmation'},
+    );
+    final states = await permissions.check();
+    expect(states.last.status, PermissionStatus.needsConfirmation);
+  });
+
+  test('Windows autostart settings uses its own native route', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final methods = <String>[];
+    messenger.setMockMethodCallHandler(AppAutostart.channel, (call) async {
+      methods.add(call.method);
+      return true;
+    });
+    expect(await permissions.request(AppPermission.autostart), isFalse);
+    expect(methods, ['openSettings']);
+  });
 }

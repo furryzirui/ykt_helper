@@ -137,6 +137,16 @@ class _StartupChecksState extends State<StartupChecks> {
     });
   }
 
+  @override
+  void didUpdateWidget(covariant StartupChecks oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.enabled && widget.enabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _run();
+      });
+    }
+  }
+
   Future<void> _run() async {
     if (_started || !widget.enabled) return;
     _started = true;

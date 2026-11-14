@@ -1,11 +1,22 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <shellapi.h>
+#include "resource.h"
 
 #include "flutter/generated_plugin_registrant.h"
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+namespace {
+constexpr UINT kShowExisting = WM_APP + 41;
+constexpr UINT kTrayMessage = WM_APP + 42;
+constexpr UINT kTrayShow = 1;
+constexpr UINT kTrayExit = 2;
+}
+
+FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool background_start,
+                             const std::wstring& instance_property)
+    : project_(project), background_start_(background_start),
+      instance_property_(instance_property) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -25,10 +36,13 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  startup_channel_ = RegisterAutostartChannel(flutter_controller_->engine(), GetHandle());
+  SetPropW(GetHandle(), instance_property_.c_str(), reinterpret_cast<HANDLE>(1));
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    if (!background_start_) this->Show();
+    else UpdateTrayIcon(true);
   });
 
   // Flutter can complete the first frame before the "show window" callback is
@@ -40,11 +54,35 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  UpdateTrayIcon(false);
+  RemovePropW(GetHandle(), instance_property_.c_str());
+  startup_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
 
   Win32Window::OnDestroy();
+}
+
+void FlutterWindow::ShowExisting() {
+  background_start_ = false;
+  ShowWindow(GetHandle(), SW_RESTORE);
+  SetForegroundWindow(GetHandle());
+  UpdateTrayIcon(false);
+  if (startup_channel_) startup_channel_->InvokeMethod("foreground", nullptr);
+}
+
+void FlutterWindow::UpdateTrayIcon(bool add) {
+  if (!add && !tray_icon_) return;
+  NOTIFYICONDATAW icon{};
+  icon.cbSize = sizeof(icon);
+  icon.hWnd = GetHandle();
+  icon.uID = 1;
+  icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+  icon.uCallbackMessage = kTrayMessage;
+  icon.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
+  wcscpy_s(icon.szTip, L"ykt_helper");
+  if (Shell_NotifyIconW(add ? NIM_ADD : NIM_DELETE, &icon)) tray_icon_ = add;
 }
 
 LRESULT
@@ -62,6 +100,25 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case kShowExisting:
+      ShowExisting();
+      return 0;
+    case kTrayMessage:
+      if (lparam == WM_LBUTTONUP || lparam == WM_LBUTTONDBLCLK) ShowExisting();
+      else if (lparam == WM_RBUTTONUP) {
+        POINT point{};
+        GetCursorPos(&point);
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, kTrayShow, L"打开 ykt_helper");
+        AppendMenuW(menu, MF_STRING, kTrayExit, L"退出");
+        SetForegroundWindow(hwnd);
+        const UINT selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            point.x, point.y, 0, hwnd, nullptr);
+        DestroyMenu(menu);
+        if (selected == kTrayShow) ShowExisting();
+        else if (selected == kTrayExit) Destroy();
+      }
+      return 0;
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;

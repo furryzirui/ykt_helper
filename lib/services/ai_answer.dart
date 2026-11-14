@@ -59,12 +59,14 @@ class AiAnswerService {
     Question question,
     bool slides, {
     String template = defaultAiPrompt,
+    String slidePrompt = defaultSlidePrompt,
   }) {
     final configured = template.trim().isEmpty ? defaultAiPrompt : template;
     final text = configured.contains('{question}')
         ? configured.replaceAll('{question}', question.promptText)
         : '$configured\n${question.promptText}';
-    return '$text${slides ? '\n可以参考课程课件进行完成' : ''}';
+    final extra = slidePrompt.trim();
+    return '$text${slides && extra.isNotEmpty ? '\n$extra' : ''}';
   }
 
   Future<List<String>> models({
@@ -121,6 +123,7 @@ class AiAnswerService {
             question,
             slides.isNotEmpty,
             template: settings.customPrompt,
+            slidePrompt: settings.slidePrompt,
           ),
         },
       ];

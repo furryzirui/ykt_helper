@@ -257,6 +257,17 @@ void main() {
         _checkCardWidths(tester, width);
         expect(find.text('{question} 自动替换为题目'), findsOneWidget);
         await _capture(tester, 'settings-automation-ai-$suffix');
+        final slidePrompt = find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField && widget.decoration?.labelText == '课件额外提示词',
+        );
+        await _reveal(tester, slidePrompt);
+        expect(
+          tester.widget<TextField>(slidePrompt).controller!.text,
+          defaultSlidePrompt,
+        );
+        expect(find.text('发送课件时追加在原提示词之后'), findsOneWidget);
+        _checkCardWidths(tester, width);
         await _reveal(tester, find.widgetWithText(FilledButton, '保存设置'));
         expect(
           tester.getSize(find.widgetWithText(FilledButton, '保存设置')).width,

@@ -11,6 +11,7 @@ import '../data/secure_store.dart';
 import '../domain/models.dart';
 import '../services/ai_answer.dart';
 import '../services/app_logs.dart';
+import '../services/app_autostart.dart';
 import '../services/background_runtime.dart';
 import '../services/gallery_saver.dart';
 import '../services/file_export.dart';
@@ -80,6 +81,7 @@ class AppController extends ChangeNotifier {
   final KeyValueStore store;
   final AiAnswerService ai;
   final BackgroundRuntime background;
+  final AppAutostart autostart;
   final GallerySaver gallery;
   final AppLogs logs;
   final bool startTimers, connectSockets;
@@ -109,6 +111,9 @@ class AppController extends ChangeNotifier {
   // wins over auto-start until the user explicitly turns the service on again.
   bool _serviceManuallyDisabled = false;
   bool _serviceManuallyEnabled = false;
+  bool _resumeLoginPending = false;
+  Future<void> _startupOperations = Future<void>.value();
+  Future<void> _settingsOperations = Future<void>.value();
   int _backgroundRevision = 0;
   Timer? _poller;
   int _generation = 0;
@@ -119,6 +124,7 @@ class AppController extends ChangeNotifier {
     KeyValueStore? store,
     AiAnswerService? ai,
     BackgroundRuntime? background,
+    AppAutostart? autostart,
     GallerySaver? gallery,
     AppLogs? logs,
     this.startTimers = true,
@@ -126,6 +132,7 @@ class AppController extends ChangeNotifier {
   }) : store = store ?? SecureStore(),
        ai = ai ?? AiAnswerService(),
        background = background ?? BackgroundRuntime(),
+       autostart = autostart ?? const AppAutostart(),
        gallery = gallery ?? const GallerySaver(),
        logs = logs ?? AppLogs() {
     this.api =
@@ -152,37 +159,58 @@ class AppController extends ChangeNotifier {
 
   Future<void> initialize() async {
     if (initialized || busy) return;
+    final generation = _generation;
     busy = true;
     _notify();
     try {
       await logs.initialize();
+      if (_disposed || generation != _generation) return;
       logs.add(AppLogEvent.startup);
       await _removeLegacyDiagnostics();
+      if (_disposed || generation != _generation) return;
       final rawSettings = await store.read('settings');
+      if (_disposed || generation != _generation) return;
       if (rawSettings != null) {
         settings = AppSettings.fromJson(object(jsonDecode(rawSettings)));
       }
       final cookies = await store.read('cookies');
+      if (_disposed || generation != _generation) return;
       if (cookies != null && cookies != '[]') {
         await api.restoreCookies(cookies);
-        account = await api.profile();
+        if (_disposed || generation != _generation) return;
+        _resumeLoginPending = true;
+        final restored = await api.profile();
+        if (_disposed || generation != _generation) return;
+        account = restored;
+        _resumeLoginPending = false;
         await _restoreAnswers();
+        if (_disposed || generation != _generation) return;
       }
     } catch (failure) {
+      if (_disposed || generation != _generation) return;
+      if (failure is ApiFailure && failure.code == 401) {
+        _resumeLoginPending = false;
+      }
       logs.add(AppLogEvent.startup, success: false);
       error = failure.toString();
     } finally {
-      initialized = true;
-      busy = false;
-      _notify();
+      if (!_disposed && generation == _generation) {
+        initialized = true;
+        busy = false;
+        _notify();
+      }
     }
-    if (account != null) {
-      await refresh();
-      await _updateBackground();
-    }
+    if (_disposed || generation != _generation) return;
+    await _updateBackground();
+    if (account != null) await refresh();
     if (startTimers) {
       _poller = Timer.periodic(const Duration(seconds: 25), (_) async {
-        if (account == null || busy || _disposed) return;
+        if (busy || _disposed) return;
+        if (_resumeLoginPending) {
+          await retryRestoredLogin();
+          return;
+        }
+        if (account == null) return;
         await refresh();
         for (final live in List.of(classrooms.values)) {
           if (!live.ended) {
@@ -192,6 +220,37 @@ class AppController extends ChangeNotifier {
         }
       });
     }
+  }
+
+  /// Boot can precede connectivity. Retry only the already restored session;
+  /// no classroom operation runs until the server confirms the account.
+  Future<void> retryRestoredLogin() async {
+    if (!_resumeLoginPending || busy || _disposed) return;
+    final generation = _generation;
+    busy = true;
+    _notify();
+    try {
+      final restored = await api.profile();
+      if (generation != _generation || _disposed) return;
+      account = restored;
+      _resumeLoginPending = false;
+      await _restoreAnswers();
+      error = null;
+    } catch (failure) {
+      if (generation != _generation || _disposed) return;
+      if (failure is ApiFailure && failure.code == 401) {
+        _resumeLoginPending = false;
+      }
+      error = failure.toString();
+    } finally {
+      if (generation == _generation && !_disposed) {
+        busy = false;
+        _notify();
+      }
+    }
+    if (generation != _generation || _disposed) return;
+    await _updateBackground();
+    if (account != null) await refresh();
   }
 
   Future<void> _removeLegacyDiagnostics() async {
@@ -212,6 +271,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> loginCompleted() async {
     final generation = ++_generation;
+    _resumeLoginPending = false;
     for (final live in classrooms.values) {
       _cancelAutomaticSubmissions(live);
     }
@@ -237,8 +297,17 @@ class AppController extends ChangeNotifier {
     logs.add(AppLogEvent.logout);
     _generation++;
     _backgroundRevision++;
+    busy = false;
     final previous = account;
     account = null;
+    _resumeLoginPending = false;
+    await background.setEnabled(false);
+    try {
+      await _configureAppAutostart(settings);
+    } catch (_) {
+      // Never let OS registration failure leave a logged-out account active.
+      logs.add(AppLogEvent.background, success: false);
+    }
     for (final live in classrooms.values) {
       _cancelAutomaticSubmissions(live);
       await live.connection?.close();
@@ -253,7 +322,6 @@ class AppController extends ChangeNotifier {
     await _writes;
     await store.delete('cookies');
     if (previous != null) await store.delete('answers:${previous.id}');
-    await background.setEnabled(false);
     _serviceManuallyEnabled = false;
     backgroundWarning = null;
     _notify();
@@ -325,24 +393,40 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> saveSettings([AppSettings? next]) async {
+  Future<void> saveSettings([AppSettings? next]) {
     final input = next ?? settings;
+    final snapshot = AppSettings.fromJson(input.toJson())
+      ..autoSubmitDelaySeconds = input.autoSubmitDelaySeconds;
+    final operation = _settingsOperations
+        .catchError((Object _) {})
+        .then((_) => _saveSettings(snapshot));
+    _settingsOperations = operation.catchError((Object _) {});
+    return operation;
+  }
+
+  Future<void> _saveSettings(AppSettings input) async {
+    if (_disposed) return;
     if (input.autoAnswer &&
         input.autoSubmit &&
         (input.autoSubmitDelaySeconds < 1 ||
             input.autoSubmitDelaySeconds > 3600)) {
       throw const ApiFailure('提交延迟请输入 1–3600 秒');
     }
-    final candidate = AppSettings.fromJson((next ?? settings).toJson());
+    final candidate = AppSettings.fromJson(input.toJson());
     // Auto-start has no useful meaning without an automation trigger. This
     // normalization also lets users turn the last automation off cleanly.
     if (!candidate.autoEnter && !candidate.autoAnswer) {
       candidate.autoStartService = false;
+      candidate.appAutoStart = false;
+    }
+    if (!autostart.supported ||
+        backgroundSupported && !candidate.autoStartService) {
+      candidate.appAutoStart = false;
     }
     if (candidate.autoAnswer) {
       if (candidate.answerMode == AnswerMode.fixed &&
-          candidate.fixedAnswer.trim().isEmpty) {
-        throw const ApiFailure('请填写固定答案后保存');
+          !candidate.hasCompleteFixedAnswers) {
+        throw const ApiFailure('请填写三类固定答案后保存');
       }
       if (candidate.answerMode == AnswerMode.ai) {
         AiAnswerService.endpoint(candidate.baseUrl, 'chat/completions');
@@ -354,7 +438,20 @@ class AppController extends ChangeNotifier {
         }
       }
     }
+    final previous = settings;
     await _write('settings', jsonEncode(candidate.toJson()));
+    try {
+      await _configureAppAutostart(candidate);
+    } catch (_) {
+      // A failed OS registration must not leave the UI claiming it is saved.
+      await _write('settings', jsonEncode(previous.toJson()));
+      try {
+        await _configureAppAutostart(previous);
+      } catch (_) {
+        logs.add(AppLogEvent.background, success: false);
+      }
+      rethrow;
+    }
     if (_disposed) return;
     settings = candidate;
     logs.add(AppLogEvent.settings, success: true);
@@ -380,20 +477,43 @@ class AppController extends ChangeNotifier {
     if (enabled && !(settings.autoEnter || settings.autoAnswer)) {
       throw const ApiFailure('请先开启至少一项自动化');
     }
+    await autostart.setSuspended(!enabled);
     _serviceManuallyDisabled = !enabled;
     _serviceManuallyEnabled = enabled;
     _notify();
     await _updateBackground();
   }
 
+  Future<void> _configureAppAutostart(AppSettings value) {
+    final enabled = value.appAutoStart;
+    final eligible =
+        (account != null || _resumeLoginPending) &&
+        (value.autoEnter || value.autoAnswer) &&
+        (!backgroundSupported || value.autoStartService) &&
+        !_serviceManuallyDisabled;
+    final operation = _startupOperations
+        .catchError((Object _) {})
+        .then((_) => autostart.configure(enabled: enabled, eligible: eligible));
+    _startupOperations = operation.catchError((Object _) {});
+    return operation;
+  }
+
   Future<void> _updateBackground() async {
     if (_disposed) return;
     final revision = ++_backgroundRevision;
+    String? startupWarning;
+    try {
+      await _configureAppAutostart(settings);
+    } catch (_) {
+      startupWarning = '应用自启动设置失败，请重新保存自动化设置';
+      logs.add(AppLogEvent.background, success: false);
+    }
+    if (_disposed || revision != _backgroundRevision) return;
     final hasAutomation = settings.autoEnter || settings.autoAnswer;
     if (!hasAutomation) _serviceManuallyEnabled = false;
     final autoRequested = settings.autoStartService && hasAutomation;
     final needed =
-        account != null &&
+        (account != null || _resumeLoginPending) &&
         backgroundSupported &&
         hasAutomation &&
         !_serviceManuallyDisabled &&
@@ -401,11 +521,13 @@ class AppController extends ChangeNotifier {
     final okay = await background.setEnabled(needed);
     if (_disposed || revision != _backgroundRevision) return;
     final previousWarning = backgroundWarning;
-    backgroundWarning = needed && !okay
-        ? defaultTargetPlatform == TargetPlatform.iOS
-              ? 'iOS 切换后台可能暂停课堂，请保持应用前台。'
-              : '后台运行未开启，请在应用权限中允许通知和后台运行；当前仅能保证前台处理课堂。'
-        : null;
+    backgroundWarning =
+        startupWarning ??
+        (needed && !okay
+            ? defaultTargetPlatform == TargetPlatform.iOS
+                  ? 'iOS 切换后台可能暂停课堂，请保持应用前台。'
+                  : '后台运行未开启，请在应用权限中允许通知和后台运行；当前仅能保证前台处理课堂。'
+            : null);
     if (previousWarning != backgroundWarning || needed && okay) {
       logs.add(AppLogEvent.background, success: okay);
     }
@@ -1124,8 +1246,17 @@ class AppController extends ChangeNotifier {
       _notify();
       try {
         final snapshot = AppSettings.fromJson(settings.toJson());
+        final fixed = snapshot.fixedAnswerFor(question);
+        if (snapshot.answerMode == AnswerMode.fixed &&
+            (fixed == null || fixed.trim().isEmpty)) {
+          live.autoStates[id] = fixed == null
+              ? '暂不支持此题型自动答题'
+              : '未设置此题型固定答案，已跳过';
+          _notify();
+          continue;
+        }
         logs.add(AppLogEvent.automatic);
-        String result = snapshot.fixedAnswer;
+        String result = fixed ?? '';
         if (snapshot.answerMode == AnswerMode.ai) {
           final presentation = live.presentations.values
               .where(

@@ -3,6 +3,7 @@ package com.furryzirui.ykt_helper
 import android.Manifest
 import android.app.NotificationManager
 import android.content.ContentValues
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -24,6 +25,25 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class MainActivity : FlutterActivity() {
+    override fun provideFlutterEngine(context: Context): FlutterEngine =
+        (application as YktApplication).engine(background = false)
+
+    override fun shouldDestroyEngineWithHost(): Boolean = false
+
+    override fun onResume() {
+        super.onResume()
+        (application as YktApplication).foreground(true)
+    }
+
+    override fun onPause() {
+        (application as YktApplication).foreground(false)
+        super.onPause()
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        super.cleanUpFlutterEngine(flutterEngine)
+        (application as YktApplication).installHeadlessPermissions(flutterEngine)
+    }
     private var galleryRequest: GalleryRequest? = null
     private var permissionRequest: RuntimePermissionRequest? = null
 
@@ -106,20 +126,14 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "check" -> {
                     try {
-                        result.success(mapOf(
-                            "camera" to permissionStatus(checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED),
-                            "notifications" to permissionStatus(notificationsAllowed()),
-                            "photos" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) "notRequired" else
-                                permissionStatus(checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED),
-                            "battery" to permissionStatus(isIgnoringBatteryOptimizations())
-                        ))
+                        result.success(RuntimePermissions.states(this))
                     } catch (_: Exception) {
                         result.error("permission_check_failed", "无法读取应用权限状态，请重试", null)
                     }
                 }
                 "request" -> {
                     val permission = call.argument<String>("permission")
-                    if (permission !in setOf("camera", "notifications", "photos", "battery")) {
+                    if (permission !in setOf("camera", "notifications", "photos", "battery", "autostart")) {
                         result.error("invalid_permission", "无法识别此权限设置", null)
                     } else {
                         requestAppPermission(permission!!, result)
@@ -127,7 +141,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "openSettings" -> {
                     val permission = call.argument<String>("permission")
-                    if (permission !in setOf("camera", "notifications", "photos", "battery")) {
+                    if (permission !in setOf("camera", "notifications", "photos", "battery", "autostart")) {
                         result.error("invalid_permission", "无法识别此权限设置", null)
                     } else {
                         try {
@@ -229,6 +243,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun openPermissionSettings(permission: String) {
+        if (permission == "autostart") {
+            openAutostartSettings()
+            return
+        }
         val intent = if (permission == "notifications") {
             Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                 .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
@@ -244,6 +262,36 @@ class MainActivity : FlutterActivity() {
             if (permission != "notifications") throw error
             startActivity(applicationSettingsIntent())
         }
+    }
+
+    private fun openAutostartSettings() {
+        // These are settings activities, not authorization APIs. Falling back
+        // to app details does not imply the OEM allowlist has been granted.
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val candidates = when {
+            manufacturer.contains("xiaomi") -> listOf(
+                ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+            )
+            manufacturer.contains("huawei") || manufacturer.contains("honor") -> listOf(
+                ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")
+            )
+            manufacturer.contains("oppo") || manufacturer.contains("realme") -> listOf(
+                ComponentName("com.oplus.safecenter", "com.oplus.safecenter.startupapp.StartupAppListActivity"),
+                ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")
+            )
+            manufacturer.contains("vivo") -> listOf(
+                ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")
+            )
+            else -> emptyList()
+        }
+        for (component in candidates) {
+            try {
+                startActivity(Intent().setComponent(component).putExtra("package_name", packageName)
+                    .putExtra("packageName", packageName))
+                return
+            } catch (_: Exception) { /* Try the next documented OEM settings route. */ }
+        }
+        startActivity(applicationSettingsIntent())
     }
 
     private fun requestAppPermission(permission: String, result: MethodChannel.Result) {

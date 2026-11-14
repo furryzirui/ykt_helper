@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
+import 'package:ykt_helper/services/app_autostart.dart';
+import 'package:ykt_helper/services/background_runtime.dart';
 import 'package:ykt_helper/ui/app.dart';
 import 'package:ykt_helper/ui/automation_page.dart';
 import 'package:ykt_helper/ui/course_pages.dart';
@@ -29,6 +31,21 @@ class _MemoryStore implements KeyValueStore {
   }
 }
 
+class _Autostart extends AppAutostart {
+  @override
+  Future<void> configure({
+    required bool enabled,
+    required bool eligible,
+  }) async {}
+  @override
+  Future<void> setSuspended(bool suspended) async {}
+}
+
+class _Background extends BackgroundRuntime {
+  @override
+  Future<bool> setEnabled(bool enabled) async => true;
+}
+
 class _UiController extends AppController {
   int confirmations = 0;
   int detailLoads = 0;
@@ -44,7 +61,13 @@ class _UiController extends AppController {
   List<Lesson>? lessonsResult;
   Future<AttendanceStatus> Function(Lesson)? attendanceLoader;
   _UiController()
-    : super(store: _MemoryStore(), startTimers: false, connectSockets: false) {
+    : super(
+        store: _MemoryStore(),
+        autostart: _Autostart(),
+        background: _Background(),
+        startTimers: false,
+        connectSockets: false,
+      ) {
     initialized = true;
   }
   @override
@@ -167,6 +190,7 @@ void main() {
             'notifications': 'granted',
             'photos': 'notRequired',
             'battery': 'granted',
+            'autostart': 'needsConfirmation',
           },
         );
   });
@@ -512,7 +536,8 @@ void main() {
   });
 
   testWidgets('自动答题配置先编辑保存成功后才应用', (tester) async {
-    final controller = _UiController();
+    final controller = _UiController()
+      ..settings = AppSettings(fixedSingleAnswer: '');
     await tester.pumpWidget(
       MaterialApp(home: AutomationPage(controller: controller)),
     );
@@ -533,14 +558,15 @@ void main() {
     await tester.tap(find.text('保存设置'));
     await tester.pumpAndSettle();
     expect(controller.settings.autoAnswer, isFalse);
-    expect(find.text('请填写固定答案后保存'), findsOneWidget);
+    expect(find.text('请填写三类固定答案后保存'), findsOneWidget);
     expect(find.text('设置已保存'), findsNothing);
     ScaffoldMessenger.of(
       tester.element(find.byType(AutomationPage)),
     ).hideCurrentSnackBar();
     await tester.pumpAndSettle();
     final answer = find.byWidgetPredicate(
-      (widget) => widget is TextField && widget.decoration?.labelText == '固定答案',
+      (widget) =>
+          widget is TextField && widget.decoration?.labelText == '单选 / 判断答案',
     );
     await tester.scrollUntilVisible(
       answer,

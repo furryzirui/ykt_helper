@@ -7,6 +7,7 @@ import 'package:ykt_helper/data/live_connection.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/services/ai_answer.dart';
+import 'package:ykt_helper/services/app_autostart.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 
 class MemoryStore implements KeyValueStore {
@@ -33,6 +34,12 @@ class NoBackground extends BackgroundRuntime {
     active = enabled;
     return true;
   }
+}
+
+class NoAutostart extends AppAutostart {
+  const NoAutostart();
+  @override
+  bool get supported => false;
 }
 
 class FakeRain extends RainApi {
@@ -173,6 +180,7 @@ void main() {
       api: api,
       store: MemoryStore(),
       background: NoBackground(),
+      autostart: const NoAutostart(),
       startTimers: false,
       connectSockets: false,
     );
@@ -186,6 +194,7 @@ void main() {
       api: api,
       store: MemoryStore(),
       background: NoBackground(),
+      autostart: const NoAutostart(),
       startTimers: false,
       connectSockets: false,
     )..account = const Account(id: 'u', name: '测试');
@@ -212,6 +221,122 @@ void main() {
       expect(live.draftAnswers, isEmpty);
     },
   );
+  for (final type in [1, 2, 3, 4, 5, 6]) {
+    test('fixed answer category is used for protocol type $type', () async {
+      controller.settings = AppSettings(
+        autoAnswer: true,
+        fixedSingleAnswer: 'B',
+        fixedMultipleAnswer: 'AB',
+        fixedSubjectiveAnswer: '第一空;第二空',
+      );
+      api.decks['p'] = Presentation(
+        id: 'p',
+        title: '分类答案',
+        slides: [
+          Slide(
+            id: 's1',
+            index: 0,
+            imageUrl: '',
+            question: Question(
+              id: 'q',
+              body: '题目',
+              type: type,
+              options: const {'A': '甲', 'B': '乙'},
+              selectionLimit: 2,
+              blankCount: 2,
+            ),
+          ),
+        ],
+      );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      await controller.processEvent(live, unlock());
+      await Future<void>.delayed(Duration.zero);
+      final dynamic expected = switch (type) {
+        1 || 6 => ['B'],
+        2 || 3 => ['A', 'B'],
+        4 => ['第一空', '第二空'],
+        _ => {'content': '第一空;第二空', 'pics': [], 'videos': []},
+      };
+      expect(live.draftAnswers['q'], expected);
+      expect(live.autoStates['q'], '答案已填充，待确认提交');
+      expect(api.submissions, 0);
+    });
+  }
+
+  test('empty fixed category skips without borrowing another answer', () async {
+    controller.settings = AppSettings(
+      autoAnswer: true,
+      fixedSingleAnswer: '',
+      fixedMultipleAnswer: 'AB',
+      fixedSubjectiveAnswer: '文字答案',
+    );
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.syncAnswers(live);
+    await controller.processEvent(live, unlock());
+    await Future<void>.delayed(Duration.zero);
+    expect(live.draftAnswers, isEmpty);
+    expect(live.autoStates['q'], '未设置此题型固定答案，已跳过');
+    expect(api.submissions, 0);
+  });
+
+  test(
+    'saving fixed automation requires every category to be filled',
+    () async {
+      controller.account = null;
+      for (final missing in ['single', 'multiple', 'subjective']) {
+        final settings = AppSettings(
+          autoAnswer: true,
+          fixedSingleAnswer: missing == 'single' ? ' ' : 'A',
+          fixedMultipleAnswer: missing == 'multiple' ? '' : 'AB',
+          fixedSubjectiveAnswer: missing == 'subjective' ? '\n' : '文字答案',
+        );
+        await expectLater(
+          controller.saveSettings(settings),
+          throwsA(
+            isA<ApiFailure>().having(
+              (error) => error.message,
+              'message',
+              '请填写三类固定答案后保存',
+            ),
+          ),
+        );
+        expect(controller.settings.autoAnswer, false);
+      }
+      await controller.saveSettings(
+        AppSettings(
+          autoAnswer: true,
+          fixedSingleAnswer: 'A',
+          fixedMultipleAnswer: 'AB',
+          fixedSubjectiveAnswer: '文字答案',
+        ),
+      );
+      expect(controller.settings.autoAnswer, true);
+      expect(controller.settings.fixedMultipleAnswer, 'AB');
+    },
+  );
+
+  test(
+    'ambiguous single-choice fixed answer still fails strict parsing',
+    () async {
+      controller.settings = AppSettings(
+        autoAnswer: true,
+        fixedSingleAnswer: 'AB',
+        fixedMultipleAnswer: 'A',
+      );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      await controller.processEvent(live, unlock());
+      await Future<void>.delayed(Duration.zero);
+      expect(live.draftAnswers, isEmpty);
+      expect(live.autoStates['q'], contains('答案无法明确匹配选项'));
+      expect(api.submissions, 0);
+    },
+  );
+
   test('AI answers also remain drafts when auto submit is off', () async {
     final ai = DeferredAi();
     controller.dispose();
@@ -221,6 +346,7 @@ void main() {
             ai: ai,
             store: MemoryStore(),
             background: NoBackground(),
+            autostart: const NoAutostart(),
             startTimers: false,
             connectSockets: false,
           )
@@ -249,6 +375,7 @@ void main() {
             ai: ai,
             store: MemoryStore(),
             background: NoBackground(),
+            autostart: const NoAutostart(),
             startTimers: false,
             connectSockets: false,
           )
@@ -355,6 +482,7 @@ void main() {
         api: api,
         store: MemoryStore(),
         background: NoBackground(),
+        autostart: const NoAutostart(),
         startTimers: false,
         connectSockets: true,
       )..account = const Account(id: 'u', name: '测试');
@@ -758,6 +886,7 @@ void main() {
             ai: ai,
             store: MemoryStore(),
             background: NoBackground(),
+            autostart: const NoAutostart(),
             startTimers: false,
             connectSockets: false,
           )
@@ -793,6 +922,7 @@ void main() {
             ai: ai,
             store: MemoryStore(),
             background: NoBackground(),
+            autostart: const NoAutostart(),
             startTimers: false,
             connectSockets: false,
           )
@@ -829,6 +959,7 @@ void main() {
               ai: ai,
               store: MemoryStore(),
               background: NoBackground(),
+              autostart: const NoAutostart(),
               startTimers: false,
               connectSockets: false,
             )
@@ -954,6 +1085,7 @@ void main() {
         api: api,
         store: MemoryStore(),
         background: NoBackground(),
+        autostart: const NoAutostart(),
         ai: ai,
         startTimers: false,
         connectSockets: false,

@@ -53,3 +53,7 @@ Name: "{autodesktop}\ykt_helper"; Filename: "{app}\ykt_helper.exe"; Tasks: deskt
 
 [Run]
 Filename: "{app}\ykt_helper.exe"; Description: "{cm:LaunchProgram,ykt_helper}"; Flags: nowait postinstall skipifsilent
+
+[Registry]
+; The saved app setting controls startup; installation only registers cleanup.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "ykt_helper"; Flags: dontcreatekey uninsdeletevalue

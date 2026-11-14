@@ -275,32 +275,78 @@ enum AnswerMode { fixed, ai }
 enum SlideScope { none, current, currentAndNext, all }
 
 const defaultAiPrompt = '请使用最简洁的回答完成这道题：{question}';
+const defaultSlidePrompt = '可以参考课程课件进行完成';
+const defaultFixedSingleAnswer = 'A';
+const defaultFixedMultipleAnswer = 'AB';
+const defaultFixedSubjectiveAnswer = '不会';
 
 class AppSettings {
   /// Lets an enabled automation start the service when needed. The direct
   /// system-service switch is a process-local control in AppController and is
   /// deliberately not persisted.
-  bool autoStartService, autoEnter, autoAnswer, autoSubmit;
+  bool autoStartService, appAutoStart, autoEnter, autoAnswer, autoSubmit;
   int autoSubmitDelaySeconds;
   AnswerMode answerMode;
-  String fixedAnswer, baseUrl, apiKey, model, customPrompt;
+  String fixedSingleAnswer, fixedMultipleAnswer, fixedSubjectiveAnswer;
+  String baseUrl, apiKey, model, customPrompt, slidePrompt;
   SlideScope slideScope;
   AppSettings({
     this.autoStartService = false,
+    this.appAutoStart = false,
     this.autoEnter = false,
     this.autoAnswer = false,
     this.autoSubmit = false,
     this.autoSubmitDelaySeconds = 30,
     this.answerMode = AnswerMode.fixed,
-    this.fixedAnswer = '',
+    String fixedAnswer = '',
+    String? fixedSingleAnswer,
+    String? fixedMultipleAnswer,
+    String? fixedSubjectiveAnswer,
     this.baseUrl = '',
     this.apiKey = '',
     this.model = '',
     this.customPrompt = defaultAiPrompt,
+    this.slidePrompt = defaultSlidePrompt,
     this.slideScope = SlideScope.none,
-  });
+  }) : fixedSingleAnswer =
+           fixedSingleAnswer ??
+           (fixedAnswer.trim().isEmpty
+               ? defaultFixedSingleAnswer
+               : fixedAnswer),
+       fixedMultipleAnswer =
+           fixedMultipleAnswer ??
+           (fixedAnswer.trim().isEmpty
+               ? defaultFixedMultipleAnswer
+               : fixedAnswer),
+       fixedSubjectiveAnswer =
+           fixedSubjectiveAnswer ??
+           (fixedAnswer.trim().isEmpty
+               ? defaultFixedSubjectiveAnswer
+               : fixedAnswer);
+
+  // Legacy source callers can still construct the former shared answer; new
+  // settings are persisted separately and never fall back between categories.
+  String get fixedAnswer => fixedSingleAnswer;
+  set fixedAnswer(String value) {
+    fixedSingleAnswer = fixedMultipleAnswer = fixedSubjectiveAnswer = value;
+  }
+
+  String? fixedAnswerFor(Question question) => switch (question.type) {
+    1 || 6 => fixedSingleAnswer,
+    2 || 3 => fixedMultipleAnswer,
+    4 || 5 => fixedSubjectiveAnswer,
+    _ => null,
+  };
+
+  bool get hasCompleteFixedAnswers => [
+    fixedSingleAnswer,
+    fixedMultipleAnswer,
+    fixedSubjectiveAnswer,
+  ].every((answer) => answer.trim().isNotEmpty);
+
   factory AppSettings.fromJson(Json json) => AppSettings(
     autoStartService: truth(json['autoStartService']),
+    appAutoStart: truth(json['appAutoStart']),
     autoEnter: truth(json['autoEnter']),
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
@@ -313,10 +359,22 @@ class AppSettings {
     },
     answerMode: json['answerMode'] == 'ai' ? AnswerMode.ai : AnswerMode.fixed,
     fixedAnswer: str(json['fixedAnswer']),
+    fixedSingleAnswer: json.containsKey('fixedSingleAnswer')
+        ? str(json['fixedSingleAnswer'])
+        : null,
+    fixedMultipleAnswer: json.containsKey('fixedMultipleAnswer')
+        ? str(json['fixedMultipleAnswer'])
+        : null,
+    fixedSubjectiveAnswer: json.containsKey('fixedSubjectiveAnswer')
+        ? str(json['fixedSubjectiveAnswer'])
+        : null,
     baseUrl: str(json['baseUrl']),
     apiKey: str(json['apiKey']),
     model: str(json['model']),
     customPrompt: firstText([json['customPrompt'], defaultAiPrompt]),
+    slidePrompt: json.containsKey('slidePrompt')
+        ? str(json['slidePrompt'])
+        : defaultSlidePrompt,
     slideScope: SlideScope.values.firstWhere(
       (e) => e.name == json['slideScope'],
       orElse: () => SlideScope.none,
@@ -324,16 +382,20 @@ class AppSettings {
   );
   Json toJson() => {
     'autoStartService': autoStartService,
+    'appAutoStart': appAutoStart,
     'autoEnter': autoEnter,
     'autoAnswer': autoAnswer,
     'autoSubmit': autoSubmit,
     'autoSubmitDelaySeconds': autoSubmitDelaySeconds,
     'answerMode': answerMode.name,
-    'fixedAnswer': fixedAnswer,
+    'fixedSingleAnswer': fixedSingleAnswer,
+    'fixedMultipleAnswer': fixedMultipleAnswer,
+    'fixedSubjectiveAnswer': fixedSubjectiveAnswer,
     'baseUrl': baseUrl,
     'apiKey': apiKey,
     'model': model,
     'customPrompt': customPrompt,
+    'slidePrompt': slidePrompt,
     'slideScope': slideScope.name,
   };
 }

@@ -101,7 +101,7 @@ import UserNotifications
       DispatchQueue.main.async {
         result([
           "camera": camera, "photos": photos,
-          "notifications": notifications, "battery": "unsupported"
+          "notifications": notifications, "battery": "unsupported", "autostart": "unsupported"
         ])
       }
     }

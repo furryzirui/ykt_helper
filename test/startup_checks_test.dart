@@ -7,6 +7,36 @@ import 'package:ykt_helper/services/startup_checks.dart';
 import 'package:ykt_helper/services/integrity_service.dart';
 
 void main() {
+  testWidgets('background launch defers dialogs until the first foreground', (
+    tester,
+  ) async {
+    var checks = 0;
+    Future<IntegrityResult> check() async {
+      checks++;
+      return const IntegrityResult(verified: true);
+    }
+
+    Widget page(bool foreground) => MaterialApp(
+      home: StartupChecks(
+        enabled: foreground,
+        integrityCheck: check,
+        updateCheck: () async => null,
+        child: const Scaffold(body: Text('ready')),
+      ),
+    );
+    await tester.pumpWidget(page(false));
+    await tester.pumpAndSettle();
+    expect(checks, 0);
+    await tester.pumpWidget(page(true));
+    await tester.pumpAndSettle();
+    expect(checks, 1);
+    await tester.pumpWidget(page(false));
+    await tester.pumpWidget(page(true));
+    await tester.pumpAndSettle();
+    expect(checks, 1);
+    expect(find.byType(AlertDialog), findsNothing);
+  });
+
   test('semantic version comparison handles 1.0.10 correctly', () {
     expect(compareVersions('1.0.10', '1.0.9'), greaterThan(0));
     expect(compareVersions('v1.0.1+6', '1.0.1'), 0);

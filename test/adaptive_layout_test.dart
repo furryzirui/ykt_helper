@@ -12,6 +12,7 @@ import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/rain_api.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
+import 'package:ykt_helper/services/app_autostart.dart';
 import 'package:ykt_helper/ui/app.dart';
 import 'package:ykt_helper/ui/course_pages.dart';
 import 'package:ykt_helper/ui/live_page.dart';
@@ -215,6 +216,17 @@ Future<void> _capture(WidgetTester tester, String name) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          AppAutostart.channel,
+          (_) async => {'enabled': false, 'permission': 'denied'},
+        );
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(AppAutostart.channel, null);
+  });
   setUpAll(() async {
     if (!_screenshots) return;
     final config = File('.dart_tool/package_config.json');

@@ -9,6 +9,7 @@ String _permissionName(AppPermission permission) => switch (permission) {
   AppPermission.notifications => '通知',
   AppPermission.photos => '保存到相册',
   AppPermission.battery => '电池优化',
+  AppPermission.autostart => '自启动',
 };
 
 IconData _permissionIcon(AppPermission permission) => switch (permission) {
@@ -16,6 +17,7 @@ IconData _permissionIcon(AppPermission permission) => switch (permission) {
   AppPermission.notifications => Icons.notifications_outlined,
   AppPermission.photos => Icons.photo_library_outlined,
   AppPermission.battery => Icons.battery_saver_outlined,
+  AppPermission.autostart => Icons.restart_alt_rounded,
 };
 
 String _statusText(AppPermission permission, PermissionStatus status) =>
@@ -25,10 +27,16 @@ String _statusText(AppPermission permission, PermissionStatus status) =>
       PermissionStatus.denied =>
         permission == AppPermission.battery ? '仍受优化' : '未允许',
       PermissionStatus.notRequired => '无需授权',
-      PermissionStatus.unsupported => '无需授权',
+      PermissionStatus.unsupported => '暂不支持',
+      PermissionStatus.needsConfirmation => '需在系统设置中确认',
     };
 
 String _permissionExplanation(AppPermission permission, bool request) {
+  if (permission == AppPermission.autostart) {
+    return defaultTargetPlatform == TargetPlatform.windows
+        ? '用于登录 Windows 后在后台启动自动化。\n\n将打开系统“启动应用”，找到 ykt_helper 后允许启动。应用内的“应用自启动”需在自动化中开启并保存。'
+        : '用于开机后和系统允许的进程回收后恢复自动化。\n\n将尝试打开系统自启动管理，请找到 ykt_helper 并允许自启动、关联启动或后台启动；若打开的是应用详情，请进入“自启动”或“权限”设置。请同时允许通知并取消电池优化。\n\nAndroid 无法统一读取厂商的自启动授权状态，设置后返回应用即可；强行停止后无法自动恢复。';
+  }
   if (defaultTargetPlatform == TargetPlatform.iOS) {
     return switch (permission) {
       AppPermission.camera => '用于扫描课堂二维码。\n\n确认后请求相机权限；若已拒绝，将打开本应用设置，请允许相机后返回。',
@@ -37,6 +45,7 @@ String _permissionExplanation(AppPermission permission, bool request) {
       AppPermission.photos =>
         '用于将课件图片写入系统相册，无需读取你的照片。\n\n确认后申请添加照片权限；若已拒绝，将打开本应用设置，请允许添加照片后返回。',
       AppPermission.battery => 'iOS 不提供本应用的电池优化豁免设置。',
+      AppPermission.autostart => 'iOS 暂不支持应用自启动。',
     };
   }
   if (!request) {
@@ -46,6 +55,7 @@ String _permissionExplanation(AppPermission permission, bool request) {
         '用于显示后台课堂运行通知。\n\n将打开本应用通知设置，可管理通知开关及后台课堂通知类别。',
       AppPermission.photos => '用于将课件图片保存到系统相册。\n\n将打开本应用详情，请进入“权限”管理存储授权。',
       AppPermission.battery => _batteryExplanation,
+      AppPermission.autostart => '',
     };
   }
   return switch (permission) {
@@ -56,6 +66,7 @@ String _permissionExplanation(AppPermission permission, bool request) {
     AppPermission.photos =>
       '用于将课件图片保存到系统相册。\n\n请在系统弹窗中允许存储；无法弹出时进入本应用设置的“权限”，允许存储后返回重试。',
     AppPermission.battery => _batteryExplanation,
+    AppPermission.autostart => '',
   };
 }
 
@@ -116,6 +127,17 @@ Future<bool> ensureAppPermission(
       return true;
     case PermissionStatus.unsupported:
       _permissionError(context, '当前平台暂不支持此权限功能');
+      return false;
+    case PermissionStatus.needsConfirmation:
+      if (!await showPermissionSettingsExplanation(context, permission)) {
+        return false;
+      }
+      if (!context.mounted) return false;
+      try {
+        await permissions.openSettings(permission);
+      } catch (_) {
+        if (context.mounted) _permissionError(context, '无法打开系统设置，请手动检查自启动');
+      }
       return false;
     case PermissionStatus.denied:
       if (!await showPermissionSettingsExplanation(

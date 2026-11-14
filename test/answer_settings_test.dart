@@ -1,0 +1,101 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:ykt_helper/domain/models.dart';
+
+void main() {
+  test('new answer and startup settings persist with independent defaults', () {
+    final fresh = AppSettings();
+    expect(fresh.fixedSingleAnswer, 'A');
+    expect(fresh.fixedMultipleAnswer, 'AB');
+    expect(fresh.fixedSubjectiveAnswer, '不会');
+    expect(fresh.slidePrompt, defaultSlidePrompt);
+    expect(fresh.appAutoStart, isFalse);
+    final saved = AppSettings(
+      fixedSingleAnswer: 'B',
+      fixedMultipleAnswer: 'AC',
+      fixedSubjectiveAnswer: '说明',
+      slidePrompt: '参考附件的定义',
+      appAutoStart: true,
+    );
+    final restored = AppSettings.fromJson(saved.toJson());
+    expect(restored.fixedSingleAnswer, 'B');
+    expect(restored.fixedMultipleAnswer, 'AC');
+    expect(restored.fixedSubjectiveAnswer, '说明');
+    expect(restored.slidePrompt, '参考附件的定义');
+    expect(restored.appAutoStart, isTrue);
+    expect(saved.toJson(), isNot(contains('fixedAnswer')));
+  });
+
+  test('missing and formerly empty shared answers use requested defaults', () {
+    for (final json in <Json>[
+      {},
+      {'fixedAnswer': ''},
+      {'fixedAnswer': '   '},
+    ]) {
+      final settings = AppSettings.fromJson(json);
+      expect(settings.fixedSingleAnswer, 'A');
+      expect(settings.fixedMultipleAnswer, 'AB');
+      expect(settings.fixedSubjectiveAnswer, '不会');
+      expect(settings.hasCompleteFixedAnswers, true);
+    }
+  });
+
+  test('legacy shared answer migrates without coupling the new categories', () {
+    final settings = AppSettings.fromJson({'fixedAnswer': 'A'});
+    expect(settings.fixedSingleAnswer, 'A');
+    expect(settings.fixedMultipleAnswer, 'A');
+    expect(settings.fixedSubjectiveAnswer, 'A');
+    settings.fixedMultipleAnswer = 'BC';
+    settings.fixedSubjectiveAnswer = '';
+    final restored = AppSettings.fromJson(settings.toJson());
+    expect(restored.fixedSingleAnswer, 'A');
+    expect(restored.fixedMultipleAnswer, 'BC');
+    expect(restored.fixedSubjectiveAnswer, isEmpty);
+    expect(restored.fixedAnswer, 'A');
+  });
+
+  test('an explicit empty category or slide prompt survives serialization', () {
+    final settings = AppSettings.fromJson({
+      'fixedAnswer': 'old',
+      'fixedSingleAnswer': '',
+      'fixedMultipleAnswer': 'AB',
+      'fixedSubjectiveAnswer': '',
+      'slidePrompt': '',
+    });
+    expect(settings.fixedSingleAnswer, isEmpty);
+    expect(settings.fixedMultipleAnswer, 'AB');
+    expect(settings.fixedSubjectiveAnswer, isEmpty);
+    expect(settings.slidePrompt, isEmpty);
+    expect(AppSettings.fromJson(settings.toJson()).slidePrompt, isEmpty);
+    expect(AppSettings.fromJson({}).slidePrompt, defaultSlidePrompt);
+  });
+
+  test('fixed answers select by protocol question category', () {
+    final settings = AppSettings(
+      fixedSingleAnswer: 'B',
+      fixedMultipleAnswer: 'AC',
+      fixedSubjectiveAnswer: '说明',
+    );
+    for (final type in [1, 6]) {
+      expect(
+        settings.fixedAnswerFor(Question(id: 'q', body: '', type: type)),
+        'B',
+      );
+    }
+    for (final type in [2, 3]) {
+      expect(
+        settings.fixedAnswerFor(Question(id: 'q', body: '', type: type)),
+        'AC',
+      );
+    }
+    for (final type in [4, 5]) {
+      expect(
+        settings.fixedAnswerFor(Question(id: 'q', body: '', type: type)),
+        '说明',
+      );
+    }
+    expect(
+      settings.fixedAnswerFor(const Question(id: 'q', body: '', type: 7)),
+      isNull,
+    );
+  });
+}

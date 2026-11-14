@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -119,6 +120,172 @@ Future<void> _close(WidgetTester tester, _Controller controller) async {
 }
 
 void main() {
+  testWidgets('应用自启动跟随服务开关，确认后仅保存草稿', (tester) async {
+    final controller = _Controller(_Ai());
+    await _show(tester, controller);
+    final appStart = find.widgetWithText(SwitchListTile, '应用自启动');
+    final autoStart = find.widgetWithText(SwitchListTile, '自动启动服务');
+    final autoEnter = find.widgetWithText(SwitchListTile, '自动签到');
+    expect(appStart, findsNothing);
+    await tester.tap(autoEnter);
+    await tester.pump();
+    expect(appStart, findsNothing);
+    await tester.tap(autoStart);
+    await tester.pump();
+    expect(appStart, findsOneWidget);
+    expect(
+      tester.getTopLeft(appStart).dy,
+      lessThan(tester.getTopLeft(autoEnter).dy),
+    );
+    await tester.tap(appStart);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('保存设置后'), findsOneWidget);
+    expect(controller.settings.appAutoStart, isFalse);
+    expect(controller.saves, 0);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(appStart).value, isFalse);
+    await tester.tap(appStart);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开启'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(appStart).value, isTrue);
+    expect(controller.settings.appAutoStart, isFalse);
+    await tester.tap(find.text('保存设置'));
+    await tester.pumpAndSettle();
+    expect(controller.saved!.appAutoStart, isTrue);
+    await tester.tap(autoStart);
+    await tester.pump();
+    expect(appStart, findsNothing);
+    await tester.tap(find.text('保存设置'));
+    await tester.pumpAndSettle();
+    expect(controller.saved!.appAutoStart, isFalse);
+    await _close(tester, controller);
+  });
+
+  testWidgets('Windows服务以完成状态显示，应用自启动在启用自动化后出现', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final controller = _Controller(_Ai());
+    await _show(tester, controller);
+    expect(find.widgetWithText(SwitchListTile, '自动启动服务'), findsNothing);
+    expect(find.byIcon(Icons.check_circle_outline_rounded), findsOneWidget);
+    expect(find.text('自动化随应用运行，无需单独启动服务'), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, '应用自启动'), findsNothing);
+    await tester.tap(find.text('自动签到'));
+    await tester.pump();
+    expect(find.widgetWithText(SwitchListTile, '应用自启动'), findsOneWidget);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: SettingsPage(controller: controller)),
+      ),
+    );
+    expect(find.byType(Switch), findsNothing);
+    expect(find.byIcon(Icons.check_circle_outline_rounded), findsOneWidget);
+    await _close(tester, controller);
+  });
+
+  testWidgets('iOS显示前台运行提示且不提供应用自启动', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final controller = _Controller(_Ai())
+      ..settings = AppSettings(autoEnter: true, autoStartService: true);
+    await _show(tester, controller);
+    expect(find.text('当前平台需保持应用前台运行'), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, '自动启动服务'), findsNothing);
+    expect(find.widgetWithText(SwitchListTile, '应用自启动'), findsNothing);
+    await _close(tester, controller);
+  });
+
+  testWidgets('三类固定答案独立编辑，保存前不影响生效值', (tester) async {
+    final controller = _Controller(_Ai())
+      ..settings = AppSettings(autoAnswer: true);
+    await _show(tester, controller);
+    const labels = ['单选 / 判断答案', '多选 / 投票答案', '主观 / 填空答案'];
+    const defaults = [
+      defaultFixedSingleAnswer,
+      defaultFixedMultipleAnswer,
+      defaultFixedSubjectiveAnswer,
+    ];
+    const values = ['C', 'ACD', '第一空\n第二空'];
+    for (var i = 0; i < labels.length; i++) {
+      await _reveal(tester, _input(labels[i]));
+      expect(
+        tester.widget<TextField>(_input(labels[i])).controller!.text,
+        defaults[i],
+      );
+      await tester.enterText(_input(labels[i]), values[i]);
+    }
+    expect(controller.settings.fixedSingleAnswer, defaultFixedSingleAnswer);
+    expect(controller.settings.fixedMultipleAnswer, defaultFixedMultipleAnswer);
+    expect(
+      controller.settings.fixedSubjectiveAnswer,
+      defaultFixedSubjectiveAnswer,
+    );
+    await _reveal(tester, find.text('保存设置'));
+    await tester.tap(find.text('保存设置'));
+    await tester.pumpAndSettle();
+    expect(controller.saved!.fixedSingleAnswer, 'C');
+    expect(controller.saved!.fixedMultipleAnswer, 'ACD');
+    expect(controller.saved!.fixedSubjectiveAnswer, '第一空\n第二空');
+    await _close(tester, controller);
+  });
+
+  testWidgets('课件额外提示词仅在发送课件时可编辑且保留草稿', (tester) async {
+    final ai = _Ai();
+    final controller = _Controller(ai)
+      ..settings = AppSettings(
+        autoAnswer: true,
+        answerMode: AnswerMode.ai,
+        baseUrl: 'https://ai.example.com/v1',
+        apiKey: 'test-key',
+        model: 'model',
+      );
+    await _show(tester, controller);
+    await tester.pump(const Duration(milliseconds: 501));
+    ai.requests.single.response.complete(['model']);
+    await tester.pumpAndSettle();
+    expect(_input('课件额外提示词'), findsNothing);
+    final scope = find.byType(DropdownButtonFormField<SlideScope>);
+    for (final value in [
+      SlideScope.current,
+      SlideScope.currentAndNext,
+      SlideScope.all,
+    ]) {
+      tester.widget<DropdownButtonFormField<SlideScope>>(scope).onChanged!(
+        value,
+      );
+      await tester.pump();
+      await _reveal(tester, _input('课件额外提示词'));
+      expect(
+        tester.widget<TextField>(_input('课件额外提示词')).controller!.text,
+        defaultSlidePrompt,
+      );
+    }
+    await tester.enterText(_input('课件额外提示词'), '请优先参考课件中的定义');
+    tester.widget<DropdownButtonFormField<SlideScope>>(scope).onChanged!(
+      SlideScope.none,
+    );
+    await tester.pump();
+    expect(_input('课件额外提示词'), findsNothing);
+    tester.widget<DropdownButtonFormField<SlideScope>>(scope).onChanged!(
+      SlideScope.current,
+    );
+    await tester.pump();
+    await _reveal(tester, _input('课件额外提示词'));
+    expect(
+      tester.widget<TextField>(_input('课件额外提示词')).controller!.text,
+      '请优先参考课件中的定义',
+    );
+    expect(controller.settings.slidePrompt, defaultSlidePrompt);
+    await _reveal(tester, find.text('保存设置'));
+    await tester.tap(find.text('保存设置'));
+    await tester.pumpAndSettle();
+    expect(controller.saved!.slidePrompt, '请优先参考课件中的定义');
+    expect(controller.saved!.slideScope, SlideScope.current);
+    await _close(tester, controller);
+  });
+
   testWidgets('自动启动服务位于顶部，仅在存在自动化项目时可开启', (tester) async {
     final controller = _Controller(_Ai());
     await _show(tester, controller);
@@ -160,7 +327,7 @@ void main() {
       await tester.tap(find.text('自动提交'));
       await tester.pump();
       expect(tester.widget<TextField>(_input('提交延迟')).controller!.text, '30');
-      await tester.enterText(_input('固定答案'), 'A');
+      await tester.enterText(_input('单选 / 判断答案'), 'A');
       await tester.enterText(_input('提交延迟'), '0');
       await _reveal(tester, find.text('保存设置'));
       await tester.pumpAndSettle();
@@ -189,13 +356,13 @@ void main() {
       await _show(tester, controller);
       await tester.tap(find.text('自动答题'));
       await tester.pump();
-      await tester.enterText(_input('固定答案'), 'A');
+      await tester.enterText(_input('单选 / 判断答案'), 'A');
       await _reveal(tester, find.text('保存设置'));
       await tester.tap(find.text('保存设置'));
       await tester.pump();
       expect(find.text('保存中…'), findsOneWidget);
       expect(controller.settings.autoAnswer, isFalse);
-      expect(controller.settings.fixedAnswer, isEmpty);
+      expect(controller.settings.fixedSingleAnswer, defaultFixedSingleAnswer);
       gate.completeError(const ApiFailure('保存失败'));
       await tester.pump();
       await tester.pump();
@@ -226,7 +393,7 @@ void main() {
       final submit = find.widgetWithText(SwitchListTile, '自动提交');
       expect(tester.widget<SwitchListTile>(submit).value, isFalse);
       await tester.tap(find.text('自动提交'));
-      await tester.enterText(_input('固定答案'), 'A');
+      await tester.enterText(_input('单选 / 判断答案'), 'A');
       expect(controller.settings.autoAnswer, isFalse);
       expect(controller.settings.autoSubmit, isFalse);
       expect(controller.settings.autoEnter, isFalse);
@@ -270,6 +437,7 @@ void main() {
           'notifications': 'granted',
           'photos': 'notRequired',
           'battery': 'granted',
+          'autostart': 'needsConfirmation',
         },
       );
       addTearDown(
@@ -472,7 +640,7 @@ void main() {
       ai.requests.single.response.complete(['stale-model']);
       await tester.pump();
       expect(find.text('stale-model'), findsNothing);
-      expect(_input('固定答案'), findsOneWidget);
+      expect(_input('单选 / 判断答案'), findsOneWidget);
       await tester.tap(find.text('自定义 AI'));
       await tester.pump(const Duration(milliseconds: 501));
       ai.requests[1].response.complete(['current-model']);

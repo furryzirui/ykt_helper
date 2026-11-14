@@ -145,6 +145,58 @@ void main() {
       AiAnswerService.prompt(q, false),
     );
   });
+  test('slide prompt is appended after the question only for sent slides', () {
+    expect(
+      AiAnswerService.prompt(
+        q,
+        true,
+        template: '答案：{question}',
+        slidePrompt: '请结合讲义中的定义作答',
+      ),
+      '答案：${q.promptText}\n请结合讲义中的定义作答',
+    );
+    expect(
+      AiAnswerService.prompt(
+        q,
+        false,
+        template: '答案：{question}',
+        slidePrompt: '请结合讲义中的定义作答',
+      ),
+      '答案：${q.promptText}',
+    );
+    expect(
+      AiAnswerService.prompt(q, true, slidePrompt: '  '),
+      AiAnswerService.prompt(q, false),
+    );
+  });
+
+  for (final sendSlides in [false, true]) {
+    test('transport uses saved slide prompt sentSlides=$sendSlides', () async {
+      final adapter = AiAdapter();
+      final service = AiAnswerService(
+        client: Dio()..httpClientAdapter = adapter,
+      );
+      await service.generate(
+        settings: AppSettings(
+          baseUrl: 'https://ai.example.com/v1',
+          model: 'vision',
+          slidePrompt: '依据所附课件回答',
+        ),
+        question: q,
+        slides: sendSlides ? [slides.first] : [],
+        loadImage: (_) async =>
+            Uint8List.fromList([137, 80, 78, 71, 13, 10, 26, 10]),
+      );
+      final content = array(
+        object(
+          array(object(adapter.requests.single.data)['messages']).first,
+        )['content'],
+      );
+      final text = str(object(content.first)['text']);
+      expect(text.contains('依据所附课件回答'), sendSlides);
+      expect(text.contains(defaultSlidePrompt), false);
+    });
+  }
   test(
     'model discovery returns explicit unique options using only its key',
     () async {

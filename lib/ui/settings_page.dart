@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../app/app_controller.dart';
@@ -83,33 +84,44 @@ class _SettingsPageState extends State<SettingsPage> {
               icon: Icons.power_settings_new_rounded,
               title: '系统服务',
               description: !c.systemServiceSupported
-                  ? '当前平台无需系统服务'
+                  ? defaultTargetPlatform == TargetPlatform.windows
+                        ? '自动化随应用运行，无需单独开启服务'
+                        : '当前平台需保持应用前台运行'
                   : c.account == null
                   ? '登录并启用自动化后可开启'
                   : !(c.settings.autoEnter || c.settings.autoAnswer)
                   ? '启用自动化后可开启，后台运行会增加耗电'
                   : c.backgroundWarning ?? '保持自动化后台运行，关闭可减少耗电',
-              trailing: Switch(
-                value: c.backgroundEnabled,
-                onChanged:
-                    !c.initialized ||
-                        c.backgroundBusy ||
-                        !c.systemServiceSupported ||
-                        c.account == null ||
-                        !(c.settings.autoEnter || c.settings.autoAnswer)
-                    ? null
-                    : (enabled) async {
-                        try {
-                          await c.setSystemService(enabled);
-                        } catch (_) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('系统服务切换失败，请重试')),
-                            );
-                          }
-                        }
-                      },
-              ),
+              trailing: !c.systemServiceSupported
+                  ? Icon(
+                      defaultTargetPlatform == TargetPlatform.windows
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.info_outline_rounded,
+                      color: Theme.of(context).colorScheme.primary,
+                    )
+                  : Switch(
+                      value: c.backgroundEnabled,
+                      onChanged:
+                          !c.initialized ||
+                              c.backgroundBusy ||
+                              !c.systemServiceSupported ||
+                              c.account == null && !c.backgroundEnabled ||
+                              !(c.settings.autoEnter || c.settings.autoAnswer)
+                          ? null
+                          : (enabled) async {
+                              try {
+                                await c.setSystemService(enabled);
+                              } catch (_) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('系统服务切换失败，请重试'),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                    ),
             ),
           ),
           _menu(Icons.shield_outlined, '应用权限', '查看授权状态与系统权限设置', () async {
