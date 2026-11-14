@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -97,7 +98,7 @@ void main() {
         saver.saveImage(Uint8List.fromList([137, 80, 1]), name: '课件'),
         throwsA(isA<ApiFailure>()),
       );
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
       await expectLater(
         saver.saveImage(png, name: '课件'),
         throwsA(isA<ApiFailure>()),
@@ -139,6 +140,70 @@ void main() {
       expect(loaded, ['https://example.com/1', 'https://example.com/3']);
       expect(names.first, contains('第1页.png'));
       expect(names.last, contains('第3页.png'));
+    },
+  );
+
+  test('iOS writes images through the same native gallery contract', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'saveImage');
+      expect((call.arguments as Map)['mimeType'], 'image/png');
+      return true;
+    });
+    await saver.saveImage(png, name: 'slide');
+  });
+
+  test(
+    'Windows batch chooses one directory and saves original images',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final directory = await Directory.systemTemp.createTemp('ykt-gallery-');
+      var choices = 0;
+      final desktopSaver = GallerySaver(
+        directoryPicker: () async {
+          choices++;
+          return directory.path;
+        },
+      );
+      try {
+        expect(
+          await desktopSaver.saveSlides(const [
+            Slide(id: '1', index: 0, imageUrl: 'https://example.com/1'),
+            Slide(id: '2', index: 1, imageUrl: 'https://example.com/2'),
+          ], (_) async => png),
+          2,
+        );
+        expect(choices, 1);
+        final files = await directory
+            .list()
+            .where((item) => item is File)
+            .cast<File>()
+            .toList();
+        expect(files, hasLength(2));
+        expect(await files.first.readAsBytes(), orderedEquals(png));
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'cancelled Windows save does not download or claim saved images',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final desktopSaver = GallerySaver(directoryPicker: () async => null);
+      var downloads = 0;
+      await expectLater(
+        desktopSaver.saveSlides(
+          const [Slide(id: '1', index: 0, imageUrl: 'https://example.com/1')],
+          (_) async {
+            downloads++;
+            return png;
+          },
+        ),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(downloads, 0);
     },
   );
 

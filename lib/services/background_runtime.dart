@@ -4,7 +4,7 @@ import 'package:flutter_background/flutter_background.dart';
 import 'app_permissions.dart';
 
 /// Keeps the Android Flutter isolate alive while classroom monitoring is active.
-/// Other platforms must provide their own lifecycle implementation.
+/// Windows runs in its normal desktop process; sleep or closing the app stops it.
 class BackgroundRuntime {
   final AppPermissions permissions;
   BackgroundRuntime({this.permissions = const AppPermissions()});
@@ -14,7 +14,9 @@ class BackgroundRuntime {
 
   bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-  bool get enabled => _supported && _enabled;
+  bool get _desktop =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+  bool get enabled => (_supported || _desktop) && _enabled;
 
   Future<bool> setEnabled(bool enabled) {
     _operation = _operation.then((_) => _setEnabled(enabled));
@@ -22,6 +24,10 @@ class BackgroundRuntime {
   }
 
   Future<bool> _setEnabled(bool enabled) async {
+    if (_desktop) {
+      _enabled = enabled;
+      return true;
+    }
     if (!_supported) return !enabled;
     try {
       if (!enabled) {

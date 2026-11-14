@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -184,6 +185,7 @@ class _LivePageState extends State<LivePage> {
   }
 
   Future<void> _export(String format) async {
+    final origin = shareOrigin(context);
     final presentation = widget.classroom.currentPresentation;
     if (presentation == null) return;
     if (_exporting) return;
@@ -200,9 +202,15 @@ class _LivePageState extends State<LivePage> {
         if (slide != null) {
           await widget.controller.saveSlide(slide);
           if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('已保存到系统相册')));
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  defaultTargetPlatform == TargetPlatform.windows
+                      ? '图片已保存'
+                      : '已保存到系统相册',
+                ),
+              ),
+            );
           }
         }
       } else if (format == 'album') {
@@ -210,14 +218,21 @@ class _LivePageState extends State<LivePage> {
           presentation.slides,
         );
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('已保存 $count 张图片到系统相册')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                defaultTargetPlatform == TargetPlatform.windows
+                    ? '已保存 $count 张图片'
+                    : '已保存 $count 张图片到系统相册',
+              ),
+            ),
+          );
         }
       } else {
         await widget.controller.exportSlides(
           presentation,
           pptx: format == 'pptx',
+          sharePositionOrigin: origin,
         );
       }
     } catch (error) {
@@ -275,11 +290,25 @@ class _LivePageState extends State<LivePage> {
               icon: const Icon(Icons.download_outlined),
               enabled: presentation != null && !_exporting,
               onSelected: _export,
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'image', child: Text('当前页保存到系统相册')),
-                PopupMenuItem(value: 'album', child: Text('全部保存到系统相册')),
-                PopupMenuItem(value: 'zip', child: Text('导出全部图片 ZIP')),
-                PopupMenuItem(value: 'pptx', child: Text('导出完整 PPTX')),
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'image',
+                  child: Text(
+                    defaultTargetPlatform == TargetPlatform.windows
+                        ? '保存当前页图片'
+                        : '当前页保存到系统相册',
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'album',
+                  child: Text(
+                    defaultTargetPlatform == TargetPlatform.windows
+                        ? '保存全部图片'
+                        : '全部保存到系统相册',
+                  ),
+                ),
+                const PopupMenuItem(value: 'zip', child: Text('导出全部图片 ZIP')),
+                const PopupMenuItem(value: 'pptx', child: Text('导出完整 PPTX')),
               ],
             ),
           ],

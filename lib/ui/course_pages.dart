@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../app/app_controller.dart';
@@ -369,6 +370,7 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
     domain.Slide? slide,
   }) async {
     if (_downloading) return;
+    final origin = shareOrigin(context);
     setState(() => _downloading = true);
     try {
       if (slide != null || format == 'album') {
@@ -379,12 +381,24 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
       }
       if (slide != null) {
         await widget.controller.saveSlide(slide);
-        if (mounted) _message('已保存到系统相册');
+        if (mounted) {
+          _message(
+            defaultTargetPlatform == TargetPlatform.windows
+                ? '图片已保存'
+                : '已保存到系统相册',
+          );
+        }
       } else if (format == 'album') {
         final count = await widget.controller.saveSlidesToGallery(
           detail.reviewSlides,
         );
-        if (mounted) _message('已保存 $count 张图片到系统相册');
+        if (mounted) {
+          _message(
+            defaultTargetPlatform == TargetPlatform.windows
+                ? '已保存 $count 张图片'
+                : '已保存 $count 张图片到系统相册',
+          );
+        }
       } else {
         final slides = detail.reviewSlides
             .where((slide) => slide.imageUrl.isNotEmpty)
@@ -410,6 +424,7 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
             slides: slides,
           ),
           pptx: format == 'pptx',
+          sharePositionOrigin: origin,
         );
       }
     } catch (error) {
@@ -524,10 +539,17 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
                 enabled: hasImages,
                 icon: const Icon(Icons.download_outlined),
                 onSelected: (format) => _download(detail!, format),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'album', child: Text('全部保存到系统相册')),
-                  PopupMenuItem(value: 'zip', child: Text('导出全部图片 ZIP')),
-                  PopupMenuItem(value: 'pptx', child: Text('导出完整 PPTX')),
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'album',
+                    child: Text(
+                      defaultTargetPlatform == TargetPlatform.windows
+                          ? '保存全部图片'
+                          : '全部保存到系统相册',
+                    ),
+                  ),
+                  const PopupMenuItem(value: 'zip', child: Text('导出全部图片 ZIP')),
+                  const PopupMenuItem(value: 'pptx', child: Text('导出完整 PPTX')),
                 ],
               ),
           ],
@@ -631,7 +653,9 @@ class ReviewSlideCard extends StatelessWidget {
               ),
               if (slide.imageUrl.isNotEmpty)
                 IconButton(
-                  tooltip: '保存到系统相册',
+                  tooltip: defaultTargetPlatform == TargetPlatform.windows
+                      ? '保存图片'
+                      : '保存到系统相册',
                   visualDensity: VisualDensity.compact,
                   constraints: const BoxConstraints.tightFor(
                     width: 36,

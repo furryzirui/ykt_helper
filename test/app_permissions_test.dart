@@ -135,7 +135,7 @@ void main() {
   test(
     'other platforms report unsupported and never open Android settings',
     () async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
       var nativeCalls = 0;
       messenger.setMockMethodCallHandler(permissionChannel, (_) async {
         nativeCalls++;
@@ -155,6 +155,57 @@ void main() {
         throwsA(isA<ApiFailure>()),
       );
       expect(nativeCalls, 0);
+    },
+  );
+
+  test(
+    'iOS maps native states and requests only the selected permission',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      final methods = <String>[];
+      messenger.setMockMethodCallHandler(permissionChannel, (call) async {
+        methods.add(call.method);
+        if (call.method == 'check') {
+          return {...state(), 'photos': 'denied', 'battery': 'unsupported'};
+        }
+        expect((call.arguments as Map)['permission'], 'photos');
+        return true;
+      });
+      final result = await permissions.check();
+      expect(result.last.status, PermissionStatus.unsupported);
+      expect(result[2].status, PermissionStatus.denied);
+      expect(await permissions.request(AppPermission.photos), isTrue);
+      expect(methods, ['check', 'request']);
+    },
+  );
+
+  test('Windows folder saving requires no Android photo permission', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final states = await permissions.check();
+    expect(
+      states
+          .singleWhere((state) => state.permission == AppPermission.photos)
+          .status,
+      PermissionStatus.notRequired,
+    );
+    expect(
+      states
+          .where((state) => state.permission != AppPermission.photos)
+          .every((state) => state.status == PermissionStatus.unsupported),
+      isTrue,
+    );
+  });
+
+  test(
+    'Windows monitoring uses the desktop process without Android services',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final runtime = BackgroundRuntime();
+      expect(await runtime.setEnabled(true), isTrue);
+      expect(runtime.enabled, isTrue);
+      expect(calls, isEmpty);
+      expect(await runtime.setEnabled(false), isTrue);
+      expect(runtime.enabled, isFalse);
     },
   );
 

@@ -120,7 +120,11 @@ class _UiController extends AppController {
   }
 
   @override
-  Future<void> exportSlides(Presentation deck, {required bool pptx}) async {
+  Future<void> exportSlides(
+    Presentation deck, {
+    required bool pptx,
+    Rect? sharePositionOrigin,
+  }) async {
     exportedSlides = deck;
     exportedPptx = pptx;
   }

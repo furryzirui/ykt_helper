@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app/app_controller.dart';
+import 'widgets.dart';
 
 class LogsPage extends StatefulWidget {
   final AppController controller;
@@ -21,9 +22,12 @@ class _LogsPageState extends State<LogsPage> {
   Future<void> _export() async {
     if (_exporting) return;
     setState(() => _exporting = true);
+    final origin = shareOrigin(context);
     try {
       final file = await widget.controller.logs.exportDocument();
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)], sharePositionOrigin: origin),
+      );
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(

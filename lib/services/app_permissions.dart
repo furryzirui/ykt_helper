@@ -20,7 +20,9 @@ class AppPermissions {
   const AppPermissions();
 
   bool get _supported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   Future<List<AppPermissionState>> check() async {
     if (!_supported) {
@@ -28,7 +30,11 @@ class AppPermissions {
         for (final permission in AppPermission.values)
           AppPermissionState(
             permission: permission,
-            status: PermissionStatus.unsupported,
+            status:
+                defaultTargetPlatform == TargetPlatform.windows &&
+                    permission == AppPermission.photos
+                ? PermissionStatus.notRequired
+                : PermissionStatus.unsupported,
           ),
       ];
     }

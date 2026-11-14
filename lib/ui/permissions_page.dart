@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../services/app_permissions.dart';
@@ -27,6 +28,16 @@ String _statusText(AppPermission permission, PermissionStatus status) =>
     };
 
 String _permissionExplanation(AppPermission permission, bool request) {
+  if (defaultTargetPlatform == TargetPlatform.iOS) {
+    return switch (permission) {
+      AppPermission.camera => '用于扫描课堂二维码。\n\n确认后请求相机权限；若已拒绝，将打开本应用设置，请允许相机后返回。',
+      AppPermission.notifications =>
+        '用于显示应用通知。\n\n确认后请求通知权限；若已拒绝，将打开本应用设置，请允许通知后返回。',
+      AppPermission.photos =>
+        '用于将课件图片写入系统相册，无需读取你的照片。\n\n确认后申请添加照片权限；若已拒绝，将打开本应用设置，请允许添加照片后返回。',
+      AppPermission.battery => 'iOS 不提供本应用的电池优化豁免设置。',
+    };
+  }
   if (!request) {
     return switch (permission) {
       AppPermission.camera => '用于扫描课堂二维码。\n\n将打开本应用详情，请进入“权限”管理相机授权。',

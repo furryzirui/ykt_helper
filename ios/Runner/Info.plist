@@ -30,6 +30,8 @@
 	<string>用于扫描雨课堂二维码。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于选择课堂作答所需图片。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于将课件图片保存到系统相册。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

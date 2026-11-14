@@ -3,6 +3,12 @@ import 'package:flutter_html/flutter_html.dart';
 
 import '../domain/models.dart' as domain;
 
+Rect? shareOrigin(BuildContext context) {
+  final box = context.findRenderObject();
+  if (box is! RenderBox || !box.hasSize || box.size.isEmpty) return null;
+  return box.localToGlobal(Offset.zero) & box.size;
+}
+
 AppBar fullTitleAppBar(
   BuildContext context, {
   required String title,

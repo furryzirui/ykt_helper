@@ -6,7 +6,7 @@ import '../services/app_permissions.dart';
 import 'permissions_page.dart';
 
 Future<String?> showQrScanner(BuildContext context) async {
-  if (Platform.isAndroid &&
+  if ((Platform.isAndroid || Platform.isIOS) &&
       !await ensureAppPermission(context, AppPermission.camera)) {
     return null;
   }

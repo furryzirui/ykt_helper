@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show Rect;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -362,7 +363,9 @@ class AppController extends ChangeNotifier {
     final okay = await background.setEnabled(needed);
     final previousWarning = backgroundWarning;
     backgroundWarning = needed && !okay
-        ? '后台运行未开启，请在应用权限中允许通知和后台运行；当前仅能保证前台处理课堂。'
+        ? defaultTargetPlatform == TargetPlatform.iOS
+              ? 'iOS 切换后台可能暂停课堂，请保持应用前台。'
+              : '后台运行未开启，请在应用权限中允许通知和后台运行；当前仅能保证前台处理课堂。'
         : null;
     if (previousWarning != backgroundWarning || needed && okay) {
       logs.add(AppLogEvent.background, success: okay);
@@ -1305,10 +1308,19 @@ class AppController extends ChangeNotifier {
     return Uint8List.fromList(bytes);
   }
 
-  Future<void> exportSlides(Presentation deck, {required bool pptx}) async {
+  Future<void> exportSlides(
+    Presentation deck, {
+    required bool pptx,
+    Rect? sharePositionOrigin,
+  }) async {
     await _logged(AppLogEvent.export, () async {
       final file = await SlideExporter(loadImage).export(deck, pptx: pptx);
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          sharePositionOrigin: sharePositionOrigin,
+        ),
+      );
     });
   }
 

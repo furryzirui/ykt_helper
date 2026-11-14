@@ -1,0 +1,47 @@
+name: Windows and iOS
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Package Windows installer
+        shell: pwsh
+        run: ./scripts/windows/package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ykt-helper-windows
+          path: dist/*windows*.exe
+          if-no-files-found: error
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+      - name: Package unsigned IPA
+        run: bash scripts/ios/package_unsigned.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ykt-helper-ios-unsigned
+          path: dist/*ios-unsigned.ipa
+          if-no-files-found: error
