@@ -1,8 +1,8 @@
 # ykt_helper
 
-普通版雨课堂辅助工具，支持 Android 8.0 及以上。Windows、iOS 后续适配。
+普通版雨课堂辅助工具，支持 Android、Windows 和 iOS。
 
-**版本 1.0.0** · [下载 APK](https://github.com/furryzirui/ykt_helper/releases/tag/v1.0.0) · [GPL-3.0](LICENSE)
+**版本 1.0.0** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/tag/v1.0.0) · [GPL-3.0](LICENSE)
 
 ## 功能
 
@@ -15,7 +15,9 @@
 
 ## 使用
 
-下载 APK 后在“设置”登录；自动化选项修改后点击保存。自动签到、自动答题和自动提交默认关闭。后台运行需允许通知，并调整电池优化设置。
+安装后在“设置”登录；自动化选项修改后点击保存。自动签到、自动答题和自动提交默认关闭。
+
+Android 8.0+ 提供 APK，后台运行需允许通知并调整电池优化；Windows 10 1809+ x64 提供 EXE 安装包；iOS 15+ 提供未签名 IPA，需自行签名后安装。iOS 自动化需保持应用在前台，Windows 需保持应用运行。
 
 AI 使用 OpenAI 兼容服务，填写 `base_url`、`api_key` 后选择模型；发送图片需使用支持图像输入的模型。
 
@@ -23,7 +25,7 @@ AI 使用 OpenAI 兼容服务，填写 `base_url`、`api_key` 后选择模型；
 
 ## 构建
 
-Flutter 3.50.0 / Dart 3.14.0、JDK 21、Android SDK 36。
+Flutter 3.50.0 / Dart 3.14.0；Android 另需 JDK 21 和 Android SDK 36。
 
 ```sh
 flutter pub get
@@ -32,7 +34,7 @@ flutter test
 flutter build apk --release
 ```
 
-未配置发布证书时生成调试签名测试包。正式签名及构建问题见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification.md)。请勿提交账号凭证或签名私钥。
+各平台构建及签名见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification.md)。请勿提交账号凭证或签名私钥。
 
 ## 许可证
 

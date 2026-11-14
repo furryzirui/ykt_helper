@@ -7,7 +7,7 @@ Android 包名：`com.furryzirui.ykt_helper`；iOS Bundle ID：`com.furryzirui.y
 | 验证 | 结果 / 覆盖范围 |
 | --- | --- |
 | Flutter 静态分析 | 完整 `flutter analyze --no-pub` 通过，无问题 |
-| 全部本地测试 | 149 项通过，包含提交延迟、AI 生成中编辑、迟到远端结果、取消与失败状态回归 |
+| 全部本地测试 | 157 项通过，包含提交延迟、AI 生成中编辑、迟到远端结果、取消与失败状态，以及跨平台权限、目录保存和验证码协议 |
 | HTTP 协议 | 普通版认证、教学班关联、归档及历史分页、旧版标记、独立签到报告、本人答案和提交 |
 | 自动答题与课堂事件 | 固定/AI 仅填充、手动确认、默认 30 秒提交延迟、迟到结果、重复事件、收题、时限和课件更新 |
 | 账号隔离 | 切换账号和课堂时的迟到结果、已有答案恢复和课件同步 |
@@ -17,7 +17,7 @@ Android 包名：`com.furryzirui.ykt_helper`；iOS Bundle ID：`com.furryzirui.y
 | 日志 | 枚举/数字白名单、持久化和恢复、500 条边界、损坏条目处理、TXT 导出等待初始化及存储失败 |
 | 权限与后台服务 | Dart 通道和模拟结果测试：单项请求、状态映射、平台边界、异常、后台纯检查及禁用插件自行授权；Android 原生弹窗和设置路由仅代码审查 |
 | 权限页面 | 用途与步骤、确认才申请或跳转、取消零跳转、恢复前台重查、无需授权及错误提示 |
-| 相册与导出 | PNG/JPEG 原图、按页保存、无图页、部分失败数量、ZIP/OpenXML 结构和平台边界 |
+| 相册与导出 | PNG/JPEG 原图、按页保存、无图页、部分失败数量、ZIP/OpenXML 结构、Windows 目录选择/取消/文件写入及平台边界；iPad 分享位置代码审查 |
 | 布局 | 360×800、字号 1.0 / 1.5 共 8 项离线检查通过，已查看生成的课程、课堂列表、回顾与自动化布局；图标正常加载 |
 | Android Release | 强制正式签名构建成功；包名 `com.furryzirui.ykt_helper`、版本 1.0.0+5、min 26 / target 36、arm64-v8a / armeabi-v7a / x86_64 均经 `aapt` 核验，`apksigner` v2 验证通过，证书为独立 RSA 3072 发布证书 |
 
@@ -29,8 +29,12 @@ Android 包名：`com.furryzirui.ykt_helper`；iOS Bundle ID：`com.furryzirui.y
 
 此前 0.1.1 的 Android 16 真机检查见 [历史验收记录](device-validation-2026-11-14.md)，不作为 1.0.0 新功能及正式签名的真机证明。三种真实登录流程、进行中课堂答案同步及自动填充、签到报告时机、位置签到、AI 作答和长时间锁屏事件的详细覆盖见 [Android 联调步骤](android-validation.md)。
 
-Windows 和 iOS 仅完成工程准备与平台模块划分，未完成目标系统构建、签名或原生插件适配。
+iOS 已在 [macOS CI](https://github.com/furryzirui/ykt_helper/actions/runs/43540203991/job/132278728534) 完成 Swift 编译、`flutter build ios --release --no-codesign` 和 IPA 打包。下载后再次核验 ZIP CRC、Bundle ID、1.0.0+5、最低 iOS 15、iphoneos / arm64，以及主程序无 `LC_CODE_SIGNATURE` 和无描述文件。内嵌框架仅保留工具链 ad-hoc 签名，无 Apple 开发者证书。安装前需自行签名，未验证 iPhone/iPad 上的运行、Keychain、权限弹窗或真实课堂；系统挂起后不保证自动化运行。
+
+Windows 已在 [Windows CI](https://github.com/furryzirui/ykt_helper/actions/runs/43541107263/job/132281621837) 完成 x64 Release 编译及 Inno Setup 打包。修复 MSVC 对 WebView2 插件实验性协程的兼容限制，并补入必需的 `WebView2Loader.dll`；打包记录确认包含该文件和 VC++ 运行库。下载后检查 MZ/PE、Inno 数据头及产品版本 1.0.0，安装器为 32 位引导程序、应用为 x64。未运行安装器，也未验证真实登录、安全存储、分享面板或课堂事件。
+
+包含最终代码的 [Android 云端检查](https://github.com/furryzirui/ykt_helper/actions/runs/43541107227) 已通过分析、测试、构建和产物上传；CI 的 APK 为调试证书测试包，Release 使用本地强制正式签名构建的 APK。
 
 交付 APK、源码及校验和将随 [v1.0.0 Release](https://github.com/furryzirui/ykt_helper/releases/tag/v1.0.0) 提供。正式证书 SHA-256：`a1a111e5df677fd367379bafe5846fdb4ef7afcc80d16cd9bbec002a0d2cb8c3`。源码不包含发布私钥和密码。
 
-APK：77,269,146 字节，SHA-256 `2a626cf084bce2b47fffa0bc8c342525a0bdfefe96b377483a59aac894530f44`。正式签名构建、静态检查及本地测试通过；包含本轮新增功能的云端结果可在仓库 Actions 对照相应提交查看。
+APK：77,270,318 字节，SHA-256 `921fe3a5c4a0b518be2e3271a2be4571817bce2d1fc5a762b849a10db69cc203`。EXE：12,281,012 字节，SHA-256 `99146fb4d4e02a1193cd3fc21842a501d8c3e152881253c41fcb25c9c4a31998`。IPA：9,049,419 字节，SHA-256 `1eed36000b2e6bdec2c9dde44c7869c3f520cb8dceffae693ef47f470936daf0`。最终文件及其校验和见 Release；`BUILD-INFO-1.0.0.txt` 记录各平台构建来源。

@@ -27,7 +27,7 @@ cd android
 
 本项目的发布私钥和密码只在本地保管，不提供给源码构建者。`.signing/`、`android/key.properties`、密钥库和密码不得加入 Git 或公开源码包。密钥持有人应分别备份私钥及其密码，后续正式更新使用同一证书；丢失后不能继续以原证书签名。
 
-## Windows 构建
+## 在 Windows 主机构建 Android
 
 Windows 中文项目路径可能影响 Android Release 的 AOT 编译。可用 `subst` 将项目临时映射到空闲的 ASCII 盘符，然后在映射路径执行：
 
@@ -48,3 +48,29 @@ JDK 若报 `Unable to establish loopback connection`，创建短路径临时目�
 Windows 首次运行插件需要符号链接权限，可开启开发者模式；只做 Android 构建时也可按 Flutter 提示修复对应平台生成目录。Linux CI 无此 Windows 符号链接限制。
 
 项目提供 CI 的分析、测试和调试签名 APK 构建，不自动创建 GitHub Release。CI 不持有正式发布私钥；CI、本机调试签名与正式签名可能不同，不应混用覆盖测试。
+
+## Windows EXE 安装包
+
+需要 Windows、Visual Studio C++ 桌面工具和 Inno Setup 6。在不含中文的项目路径执行：
+
+```powershell
+flutter pub get
+flutter build windows --release
+./scripts/windows/package.ps1
+```
+
+产物为 `dist/ykt_helper-1.0.0-windows-setup.exe`，包含 Flutter、原生插件、资源和 VC++ 运行库，每用户安装。脚本可用 `-InnoSetupCompiler` 指定现有 `ISCC.exe`。安装包未做 Authenticode 签名；登录安全验证需要 WebView2 Runtime。
+
+## iOS 未签名 IPA
+
+需要 macOS、Xcode、CocoaPods，最低 iOS 15：
+
+```sh
+flutter pub get
+flutter build ios --release --no-codesign
+bash scripts/ios/package_unsigned.sh
+```
+
+产物为 `dist/ykt_helper-1.0.0-ios-unsigned.ipa`。脚本验证真实设备 arm64、Bundle ID、版本、主应用未签名、无描述文件以及 ZIP 完整性。框架可能保留工具链签名，安装前需自行对完整应用签名；此流程不需要提供 Apple 账号或签名私钥。
+
+仓库的 Windows / iOS 工作流使用对应系统构建并保存产物，不自动发布 Release。
