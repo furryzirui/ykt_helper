@@ -1,8 +1,22 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val releaseKeyFile = rootProject.file("key.properties")
+val releaseKey = Properties()
+if (releaseKeyFile.exists()) {
+    releaseKeyFile.inputStream().use { releaseKey.load(it) }
+}
+val hasReleaseSigning = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+    .all { !releaseKey.getProperty(it).isNullOrBlank() } &&
+    rootProject.file(releaseKey.getProperty("storeFile", "missing-keystore")).isFile
+if (providers.gradleProperty("yktRequireReleaseSigning").orNull == "true" && !hasReleaseSigning) {
+    throw GradleException("Release signing is required. Configure android/key.properties and its keystore.")
 }
 
 android {
@@ -16,7 +30,6 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.furryzirui.ykt_helper"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
@@ -30,11 +43,22 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(releaseKey.getProperty("storeFile"))
+                storePassword = releaseKey.getProperty("storePassword")
+                keyAlias = releaseKey.getProperty("keyAlias")
+                keyPassword = releaseKey.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Public CI builds remain test artifacts. Official distribution
+            // additionally sets yktRequireReleaseSigning to reject fallback.
+            signingConfig = signingConfigs.getByName(if (hasReleaseSigning) "release" else "debug")
         }
     }
 }

@@ -15,6 +15,20 @@ import '../services/background_runtime.dart';
 import '../services/gallery_saver.dart';
 import '../services/slide_export.dart';
 
+class _AutomaticSubmission {
+  Timer? timer;
+  final int generation;
+  final String settingsSnapshot;
+  final Question question;
+  final dynamic answer;
+  _AutomaticSubmission({
+    required this.generation,
+    required this.settingsSnapshot,
+    required this.question,
+    required this.answer,
+  });
+}
+
 class LiveClass {
   final Lesson lesson;
   final ClassroomSession session;
@@ -40,6 +54,8 @@ class LiveClass {
   bool syncingAttendance = false;
   String get checkinText => attendance.label;
   final Map<String, dynamic> draftAnswers = {};
+  final Map<String, _AutomaticSubmission> _automaticSubmissions = {};
+  final Set<String> _editedDrafts = {};
   LiveConnection? connection;
   Future<void>? answerSync;
   Future<void> eventQueue = Future.value();
@@ -184,6 +200,9 @@ class AppController extends ChangeNotifier {
 
   Future<void> loginCompleted() async {
     final generation = ++_generation;
+    for (final live in classrooms.values) {
+      _cancelAutomaticSubmissions(live);
+    }
     final profile = await api.profile();
     if (generation != _generation || _disposed) return;
     account = profile;
@@ -208,6 +227,7 @@ class AppController extends ChangeNotifier {
     final previous = account;
     account = null;
     for (final live in classrooms.values) {
+      _cancelAutomaticSubmissions(live);
       await live.connection?.close();
     }
     classrooms.clear();
@@ -292,6 +312,13 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> saveSettings([AppSettings? next]) async {
+    final input = next ?? settings;
+    if (input.autoAnswer &&
+        input.autoSubmit &&
+        (input.autoSubmitDelaySeconds < 1 ||
+            input.autoSubmitDelaySeconds > 3600)) {
+      throw const ApiFailure('提交延迟请输入 1–3600 秒');
+    }
     final candidate = AppSettings.fromJson((next ?? settings).toJson());
     if (candidate.autoAnswer) {
       if (candidate.answerMode == AnswerMode.fixed &&
@@ -313,6 +340,7 @@ class AppController extends ChangeNotifier {
     settings = candidate;
     logs.add(AppLogEvent.settings, success: true);
     for (final live in classrooms.values) {
+      _cancelAutomaticSubmissions(live, message: '设置已变化，已取消自动提交');
       live.automaticAttempts.clear();
     }
     await _updateBackground();
@@ -449,6 +477,7 @@ class AppController extends ChangeNotifier {
           if (event['op'] == 'lessonfinished' ||
               event['op'] == 'hello' && event['message'] == 'lesson finished') {
             live.ended = true;
+            _cancelAutomaticSubmissions(live);
             live.activeProblemIds.clear();
             live.connectionLabel = '课堂已结束';
             api.locationRoundChanged(live.lesson.id);
@@ -527,6 +556,7 @@ class AppController extends ChangeNotifier {
     if (op == 'lessonfinished' ||
         (op == 'hello' && event['message'] == 'lesson finished')) {
       live.ended = true;
+      _cancelAutomaticSubmissions(live);
       live.activeProblemIds.clear();
       live.connectionLabel = '课堂已结束';
       api.locationRoundChanged(live.lesson.id);
@@ -598,6 +628,11 @@ class AppController extends ChangeNotifier {
         for (final slide in old?.slides ?? <Slide>[]) {
           final questionId = slide.question?.id;
           if (questionId != null) {
+            _cancelAutomaticSubmission(
+              live,
+              questionId,
+              message: '题目已变化，已取消自动提交',
+            );
             live.activeProblemIds.remove(questionId);
             live.questions.remove(questionId);
           }
@@ -702,6 +737,11 @@ class AppController extends ChangeNotifier {
       return;
     }
     if (!fromTimeline) live.closedAtSequence.remove(id);
+    if (question.dt != integer(data['dt'])) {
+      _cancelAutomaticSubmission(live, id);
+      live._editedDrafts.remove(id);
+      live.draftAnswers.remove(id);
+    }
     question = question.launched(
       integer(data['dt']),
       integer(data['limit']),
@@ -725,6 +765,7 @@ class AppController extends ChangeNotifier {
 
   void _closeProblem(LiveClass live, String id, int sequence) {
     if (id.isEmpty) return;
+    _cancelAutomaticSubmission(live, id);
     live.closedAtSequence[id] = sequence;
     live.activeProblemIds.remove(id);
     live.autoStates[id] = '教师已收题';
@@ -733,6 +774,7 @@ class AppController extends ChangeNotifier {
 
   void _applyTiming(LiveClass live, Question question, Json timing) {
     if (timing['limit'] is! num || (timing['dt'] == null && question.dt <= 0)) {
+      _cancelAutomaticSubmission(live, question.id, message: '答题时间未确认，已取消自动提交');
       live.activeProblemIds.remove(question.id);
       live.error = '题目时限未能确认，请刷新课堂';
       return;
@@ -744,11 +786,17 @@ class AppController extends ChangeNotifier {
           ? null
           : integer(timing['now']) - DateTime.now().millisecondsSinceEpoch,
     );
+    if (updated.dt != question.dt) {
+      _cancelAutomaticSubmission(live, question.id, message: '题目已变化，已取消自动提交');
+      live._editedDrafts.remove(question.id);
+      live.draftAnswers.remove(question.id);
+    }
     live.questions[question.id] = updated;
     if (_inWindow(updated)) {
       live.activeProblemIds.add(question.id);
     } else {
       live.activeProblemIds.remove(question.id);
+      _cancelAutomaticSubmission(live, question.id, message: '答题时间已结束，已取消自动提交');
     }
   }
 
@@ -812,6 +860,9 @@ class AppController extends ChangeNotifier {
     live.answerSyncError = failures.isEmpty ? null : failures.join('\n');
     if (failures.isNotEmpty) logs.add(AppLogEvent.answers, success: false);
     live.draftAnswers.removeWhere((id, _) => live.answers.containsKey(id));
+    for (final id in live.answers.keys) {
+      _cancelAutomaticSubmission(live, id, message: '已读取提交记录');
+    }
     try {
       await _persistAnswers(live);
     } catch (_) {
@@ -827,6 +878,7 @@ class AppController extends ChangeNotifier {
     dynamic answer,
   ) async {
     if (!_valid(live) || live.ended) throw const ApiFailure('课堂已结束或账号已退出');
+    _cancelAutomaticSubmission(live, question.id);
     if (live.answers.containsKey(question.id)) throw const ApiFailure('这道题已提交');
     if (live.submitting.contains(question.id)) {
       throw const ApiFailure('这道题正在提交');
@@ -865,6 +917,141 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  void _cancelAutomaticSubmission(
+    LiveClass live,
+    String id, {
+    String? message,
+  }) {
+    final pending = live._automaticSubmissions.remove(id);
+    pending?.timer?.cancel();
+    if (pending != null && message != null) live.autoStates[id] = message;
+  }
+
+  void _cancelAutomaticSubmissions(LiveClass live, {String? message}) {
+    for (final id in List.of(live._automaticSubmissions.keys)) {
+      _cancelAutomaticSubmission(live, id, message: message);
+    }
+  }
+
+  /// A user's edit invalidates both a queued submission and an earlier AI result.
+  /// Keep the editable answer so rebuilding a card cannot restore the old result.
+  void updateAnswerDraft(LiveClass live, Question question, dynamic answer) {
+    if (!_valid(live) || live.answers.containsKey(question.id)) return;
+    live._editedDrafts.add(question.id);
+    live.draftAnswers[question.id] = answer;
+    _cancelAutomaticSubmission(live, question.id);
+    live.autoStates[question.id] = '答案已修改，待确认提交';
+    _notify();
+  }
+
+  bool _automaticSubmissionValid(LiveClass live, _AutomaticSubmission job) {
+    final id = job.question.id;
+    return _valid(live) &&
+        identical(live._automaticSubmissions[id], job) &&
+        job.generation == _generation &&
+        settings.autoAnswer &&
+        settings.autoSubmit &&
+        job.settingsSnapshot == jsonEncode(settings.toJson()) &&
+        !live.ended &&
+        live.answersKnown &&
+        !live.syncingAnswers &&
+        !live.answers.containsKey(id) &&
+        !live.submitting.contains(id) &&
+        !live._editedDrafts.contains(id) &&
+        live.activeProblemIds.contains(id) &&
+        live.questions[id]?.dt == job.question.dt &&
+        _inWindow(live.questions[id] ?? job.question) &&
+        jsonEncode(live.draftAnswers[id]) == jsonEncode(job.answer);
+  }
+
+  void _scheduleAutomaticSubmission(
+    LiveClass live,
+    Question question,
+    dynamic answer,
+    int generation,
+    String settingsSnapshot,
+    int delaySeconds,
+  ) {
+    final id = question.id;
+    final current = live.questions[id] ?? question;
+    if (current.limit > 0 &&
+        DateTime.now().millisecondsSinceEpoch +
+                current.serverOffsetMillis +
+                delaySeconds * 1000 >=
+            current.dt + current.limit * 1000) {
+      live.autoStates[id] = '答题剩余时间不足，已取消自动提交';
+      return;
+    }
+    _cancelAutomaticSubmission(live, id);
+    final job = _AutomaticSubmission(
+      generation: generation,
+      settingsSnapshot: settingsSnapshot,
+      question: question,
+      answer: answer,
+    );
+    live._automaticSubmissions[id] = job;
+    live.autoStates[id] = '答案已填充，$delaySeconds 秒后自动提交';
+    job.timer = Timer(Duration(seconds: delaySeconds), () {
+      unawaited(_submitAutomatic(live, job));
+    });
+  }
+
+  Future<void> _submitAutomatic(
+    LiveClass live,
+    _AutomaticSubmission job,
+  ) async {
+    final id = job.question.id;
+    var posting = false;
+    try {
+      if (!_automaticSubmissionValid(live, job)) {
+        if (identical(live._automaticSubmissions[id], job)) {
+          live.autoStates[id] = '课堂或设置已变化，已取消自动提交';
+        }
+        return;
+      }
+      // Waiting gives other clients time to submit; query again just before POST.
+      final deck = live.presentations.values
+          .where((deck) => deck.slides.any((slide) => slide.question?.id == id))
+          .firstOrNull;
+      if (deck != null) {
+        final remote = await api.ownAnswers(live.lesson.id, deck.id);
+        if (!_automaticSubmissionValid(live, job)) return;
+        live.answers.addAll(remote);
+        if (live.answers.containsKey(id)) {
+          live.draftAnswers.remove(id);
+          live.autoStates[id] = '已读取提交记录';
+          await _persistAnswers(live);
+          return;
+        }
+      }
+      if (!_automaticSubmissionValid(live, job)) {
+        if (identical(live._automaticSubmissions[id], job)) {
+          live.autoStates[id] = '课堂或设置已变化，已取消自动提交';
+        }
+        return;
+      }
+      posting = true;
+      live.autoStates[id] = '正在自动提交';
+      await submitAnswer(live, job.question, job.answer);
+      if (_valid(live)) live.autoStates[id] = '已自动提交';
+    } catch (failure) {
+      logs.add(AppLogEvent.automatic, success: false);
+      if (_valid(live) &&
+          (identical(live._automaticSubmissions[id], job) ||
+              posting &&
+                  !live._editedDrafts.contains(id) &&
+                  job.settingsSnapshot == jsonEncode(settings.toJson()) &&
+                  live.questions[id]?.dt == job.question.dt)) {
+        live.autoStates[id] = '自动答题未完成：$failure';
+      }
+    } finally {
+      if (identical(live._automaticSubmissions[id], job)) {
+        live._automaticSubmissions.remove(id);
+      }
+      if (_valid(live)) _notify();
+    }
+  }
+
   Future<void> _runAutomatic(LiveClass live) async {
     if (!_valid(live) || live.ended || !settings.autoAnswer) return;
     if (!live.answersKnown || live.syncingAnswers) {
@@ -880,6 +1067,7 @@ class AppController extends ChangeNotifier {
       final question = live.questions[id];
       if (question == null ||
           !_inWindow(question) ||
+          live._editedDrafts.contains(id) ||
           live.answers.containsKey(id) ||
           live.submitting.contains(id)) {
         continue;
@@ -929,6 +1117,10 @@ class AppController extends ChangeNotifier {
           live.autoStates[id] = '课堂或设置已变化，已取消自动提交';
           continue;
         }
+        if (live._editedDrafts.contains(id)) {
+          live.autoStates[id] = '答案已修改，待确认提交';
+          continue;
+        }
         final parsed = AiAnswerService.parse(result, question);
         // An official client may have submitted while AI was running.
         final deck = live.presentations.values
@@ -945,6 +1137,10 @@ class AppController extends ChangeNotifier {
           live.autoStates[id] = '已读取提交记录';
           continue;
         }
+        if (live._editedDrafts.contains(id)) {
+          live.autoStates[id] = '答案已修改，待确认提交';
+          continue;
+        }
         if (!settings.autoAnswer ||
             settingsSnapshot != jsonEncode(settings.toJson()) ||
             live.questions[id]?.dt != question.dt) {
@@ -956,17 +1152,32 @@ class AppController extends ChangeNotifier {
             !_inWindow(live.questions[id] ?? question)) {
           continue;
         }
+        live.draftAnswers[id] = parsed;
+        logs.add(AppLogEvent.draft, success: true);
         if (settings.autoSubmit) {
-          await submitAnswer(live, question, parsed);
-          live.autoStates[id] = '已自动提交';
+          _scheduleAutomaticSubmission(
+            live,
+            question,
+            parsed,
+            generation,
+            settingsSnapshot,
+            snapshot.autoSubmitDelaySeconds,
+          );
         } else {
-          live.draftAnswers[id] = parsed;
           live.autoStates[id] = '答案已填充，待确认提交';
-          logs.add(AppLogEvent.draft, success: true);
         }
       } catch (failure) {
         logs.add(AppLogEvent.automatic, success: false);
-        if (_valid(live)) live.autoStates[id] = '自动答题未完成：$failure';
+        if (_valid(live) &&
+            generation == _generation &&
+            settingsSnapshot == jsonEncode(settings.toJson()) &&
+            live.questions[id]?.dt == question.dt &&
+            !live.ended &&
+            live.activeProblemIds.contains(id) &&
+            !live._editedDrafts.contains(id) &&
+            !live.answers.containsKey(id)) {
+          live.autoStates[id] = '自动答题未完成：$failure';
+        }
       }
       _notify();
     }
@@ -1117,6 +1328,7 @@ class AppController extends ChangeNotifier {
     _generation++;
     _poller?.cancel();
     for (final live in classrooms.values) {
+      _cancelAutomaticSubmissions(live);
       unawaited(live.connection?.close() ?? Future.value());
     }
     unawaited(background.setEnabled(false));

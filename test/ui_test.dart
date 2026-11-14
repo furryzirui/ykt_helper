@@ -315,6 +315,8 @@ void main() {
 
   testWidgets('生成的选择答案同步填入两张卡片且重建保留手工编辑', (tester) async {
     final controller = _UiController(), live = _classroom();
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     const question = Question(
       id: 'draft-choice',
       body: '选择题',
@@ -353,11 +355,8 @@ void main() {
         .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
         .toList();
     expect(choices[1].value, isTrue);
-    live.draftAnswers[question.id] = ['B'];
-    await tester.pumpWidget(view());
-    choices = tester
-        .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
-        .toList();
+    expect(live.draftAnswers[question.id], ['B']);
+    expect(live.autoStates[question.id], '答案已修改，待确认提交');
     expect(choices.map((choice) => choice.value), [false, true, false, true]);
     await tester.tap(find.text('提交答案').first);
     await tester.pump();
@@ -368,6 +367,8 @@ void main() {
 
   testWidgets('生成的填空与主观答案填入编辑框且重建不覆盖修改', (tester) async {
     final controller = _UiController(), live = _classroom();
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     const blank = Question(
       id: 'blank-draft',
       body: '填空题',
@@ -412,6 +413,14 @@ void main() {
     await tester.enterText(find.byType(TextField).first, '手动改写第一空');
     await tester.pumpWidget(view());
     expect(find.text('手动改写第一空'), findsOneWidget);
+    expect(live.draftAnswers[blank.id], ['手动改写第一空', '第二空']);
+    expect(live.autoStates[blank.id], '答案已修改，待确认提交');
+    await tester.ensureVisible(find.byType(TextField).last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, '手动改写主观回答');
+    await tester.pumpWidget(view());
+    expect(live.draftAnswers[essay.id]['content'], '手动改写主观回答');
+    expect(live.autoStates[essay.id], '答案已修改，待确认提交');
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });

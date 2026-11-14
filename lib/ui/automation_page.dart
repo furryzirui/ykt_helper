@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app/app_controller.dart';
 import '../domain/models.dart';
@@ -59,6 +60,7 @@ class _AutomationPageState extends State<AutomationPage> {
       'baseUrl': source.baseUrl,
       'apiKey': source.apiKey,
       'prompt': source.customPrompt,
+      'submitDelay': '${source.autoSubmitDelaySeconds}',
     };
     for (final entry in _fields.entries) {
       entry.value.text = values[entry.key] ?? '';
@@ -180,6 +182,13 @@ class _AutomationPageState extends State<AutomationPage> {
 
   Future<bool> _save() async {
     if (_saving) return false;
+    if (_draft!.autoAnswer &&
+        _draft!.autoSubmit &&
+        (_draft!.autoSubmitDelaySeconds < 1 ||
+            _draft!.autoSubmitDelaySeconds > 3600)) {
+      _showError('提交延迟请输入 1–3600 秒');
+      return false;
+    }
     if (_draft!.autoAnswer &&
         _draft!.answerMode == AnswerMode.ai &&
         !_modelsReady) {
@@ -322,6 +331,32 @@ class _AutomationPageState extends State<AutomationPage> {
                             : (value) =>
                                   setState(() => settings.autoSubmit = value),
                       ),
+                      if (settings.autoSubmit)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8, bottom: 8),
+                          child: TextField(
+                            enabled: !_disabled,
+                            controller: _field(
+                              'submitDelay',
+                              '${settings.autoSubmitDelaySeconds}',
+                            ),
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            decoration: const InputDecoration(
+                              labelText: '提交延迟',
+                              suffixText: '秒',
+                              helperText: '1–3600 秒',
+                              prefixIcon: Icon(Icons.timer_outlined),
+                            ),
+                            onChanged: (value) =>
+                                settings.autoSubmitDelaySeconds =
+                                    int.tryParse(value) ?? 0,
+                            onEditingComplete: () =>
+                                FocusScope.of(context).unfocus(),
+                          ),
+                        ),
                       const SizedBox(height: 8),
                       SegmentedButton<AnswerMode>(
                         segments: const [

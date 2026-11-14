@@ -4,7 +4,10 @@ import subprocess
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
-destination = root / "dist" / "ykt_helper-0.1.3-source.zip"
+version = next(line.split(":", 1)[1].strip().split("+")[0]
+               for line in (root / "pubspec.yaml").read_text(encoding="utf-8").splitlines()
+               if line.startswith("version:"))
+destination = root / "dist" / f"ykt_helper-{version}-source.zip"
 destination.parent.mkdir(exist_ok=True)
 paths = subprocess.check_output(
     ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],

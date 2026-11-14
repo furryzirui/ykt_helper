@@ -1,15 +1,15 @@
 # 本轮验证
 
-日期：2026-11-14；版本：0.1.3+4；应用：`ykt_helper`。本轮按用户要求不使用 ADB、不安装或操作手机。
+日期：2026-11-14；版本：1.0.0+5；应用：`ykt_helper`。本轮按用户要求不使用 ADB、不安装或操作手机。
 
-Android 包名：`com.furryzirui.ykt_helper`；iOS Bundle ID：`com.furryzirui.ykt-helper`。Android 包名已变更，不能覆盖此前 `com.furryzirui.rain_classroom` 测试包或自动读取其私有数据。
+Android 包名：`com.furryzirui.ykt_helper`；iOS Bundle ID：`com.furryzirui.ykt-helper`。1.0.0 使用独立正式签名，不能覆盖此前同包名的调试签名测试包，需要卸载后重新安装、登录和设置。
 
 | 验证 | 结果 / 覆盖范围 |
 | --- | --- |
 | Flutter 静态分析 | 完整 `flutter analyze --no-pub` 通过，无问题 |
-| 全部本地测试 | 133 项通过，含日志读取未完成时立即导出的回归测试 |
+| 全部本地测试 | 149 项通过，包含提交延迟、AI 生成中编辑、迟到远端结果、取消与失败状态回归 |
 | HTTP 协议 | 普通版认证、教学班关联、归档及历史分页、旧版标记、独立签到报告、本人答案和提交 |
-| 自动答题与课堂事件 | 固定/AI 仅填充、手动确认、迟到结果、重复事件、收题、时限和课件更新 |
+| 自动答题与课堂事件 | 固定/AI 仅填充、手动确认、默认 30 秒提交延迟、迟到结果、重复事件、收题、时限和课件更新 |
 | 账号隔离 | 切换账号和课堂时的迟到结果、已有答案恢复和课件同步 |
 | AI 与自动化设置 | 模型发现、自定义/默认提示词、四种课件范围、图题、严格解析、保存失败不生效、二级菜单及草稿 |
 | 登录界面 | 三种方式同排、短信/密码字段切换、秘密输入清理、迟到二维码不恢复 |
@@ -19,14 +19,18 @@ Android 包名：`com.furryzirui.ykt_helper`；iOS Bundle ID：`com.furryzirui.y
 | 权限页面 | 用途与步骤、确认才申请或跳转、取消零跳转、恢复前台重查、无需授权及错误提示 |
 | 相册与导出 | PNG/JPEG 原图、按页保存、无图页、部分失败数量、ZIP/OpenXML 结构和平台边界 |
 | 布局 | 360×800、字号 1.0 / 1.5 共 8 项离线检查通过，已查看生成的课程、课堂列表、回顾与自动化布局；图标正常加载 |
-| Android Release | 构建成功；`aapt` 核验包名 `com.furryzirui.ykt_helper`、名称 `ykt_helper`、0.1.3+4、min 26 / target 36，arm64-v8a / armeabi-v7a / x86_64；`apksigner` 验证 v2 签名通过 |
+| Android Release | 强制正式签名构建成功；包名 `com.furryzirui.ykt_helper`、版本 1.0.0+5、min 26 / target 36、arm64-v8a / armeabi-v7a / x86_64 均经 `aapt` 核验，`apksigner` v2 验证通过，证书为独立 RSA 3072 发布证书 |
+
+初次 GitHub 检查在界面测试滚动后误点屏幕外按钮。修复后，[完整云端检查](https://github.com/furryzirui/ykt_helper/actions/runs/43535050232) 已通过测试、Android 构建及产物上传。普通测试统一使用 Flutter 默认测试字体，滚动后等待布局并验证按钮可点击；可选截图仍可使用本机中文字体。
 
 自动化测试使用模拟响应或本地文件，不使用个人账号，不含真实课件、答案或凭证。权限测试模拟平台通道返回，不能证明 Android 系统实际出现了授权弹窗或厂商设置打开了指定页面。离线布局截图位于被 Git 忽略的 `.workspace-bootstrap/qa/`，不是应用内演示数据，也不随源码或 APK 分发。
 
-本轮仅进行本地测试、代码审查和编译校验。单项授权弹窗、系统设置跳转、Android 8–9 相册权限、通知类别恢复、厂商电池开关和真实课堂事件均需用户真机验收。公开仓库及交付包应排除凭证、本机 SDK 配置、签名私钥、设备截图、参考仓库和构建缓存。
+用户反馈此前手机测试未发现问题，未逐项记录覆盖范围。本轮由开发环境进行本地测试、代码审查和编译校验。新增延迟、单项授权弹窗、系统设置跳转、Android 8–9 相册权限、通知类别恢复、厂商电池开关和真实课堂事件的目标设备表现仍需按联调清单验证。公开仓库及交付包排除凭证、本机 SDK 配置、签名私钥、设备截图、参考仓库和构建缓存。
 
-此前 0.1.1 的 Android 16 真机检查见 [历史验收记录](device-validation-2026-11-14.md)，不作为 0.1.3 新功能或新包名的真机证明。三种真实登录流程、进行中课堂答案同步及自动填充、签到报告时机、位置签到、AI 作答和长时间锁屏事件仍待受控课堂联调。详见 [Android 联调步骤](android-validation.md)。
+此前 0.1.1 的 Android 16 真机检查见 [历史验收记录](device-validation-2026-11-14.md)，不作为 1.0.0 新功能及正式签名的真机证明。三种真实登录流程、进行中课堂答案同步及自动填充、签到报告时机、位置签到、AI 作答和长时间锁屏事件的详细覆盖见 [Android 联调步骤](android-validation.md)。
 
 Windows 和 iOS 仅完成工程准备与平台模块划分，未完成目标系统构建、签名或原生插件适配。
 
-交付 APK：`ykt_helper-0.1.3-android.apk`，77,232,282 字节，SHA-256 `2aaeafdf0cbd152e428ed030540b22911fdb491434313926c0d37df16c821913`。签名为本机 Android 调试证书，仅用于当前测试交付；本轮未创建 GitHub Release。
+交付 APK、源码及校验和将随 [v1.0.0 Release](https://github.com/furryzirui/ykt_helper/releases/tag/v1.0.0) 提供。正式证书 SHA-256：`a1a111e5df677fd367379bafe5846fdb4ef7afcc80d16cd9bbec002a0d2cb8c3`。源码不包含发布私钥和密码。
+
+APK：77,269,146 字节，SHA-256 `2a626cf084bce2b47fffa0bc8c342525a0bdfefe96b377483a59aac894530f44`。正式签名构建、静态检查及本地测试通过；包含本轮新增功能的云端结果可在仓库 Actions 对照相应提交查看。

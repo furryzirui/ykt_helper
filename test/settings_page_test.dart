@@ -102,6 +102,39 @@ Future<void> _close(WidgetTester tester, _Controller controller) async {
 
 void main() {
   testWidgets(
+    'submission delay appears only when enabled and validates before saving',
+    (tester) async {
+      final controller = _Controller(_Ai());
+      await _show(tester, controller);
+      expect(_input('提交延迟'), findsNothing);
+      await tester.tap(find.text('自动答题'));
+      await tester.pump();
+      expect(_input('提交延迟'), findsNothing);
+      await tester.tap(find.text('自动提交'));
+      await tester.pump();
+      expect(tester.widget<TextField>(_input('提交延迟')).controller!.text, '30');
+      await tester.enterText(_input('固定答案'), 'A');
+      await tester.enterText(_input('提交延迟'), '0');
+      await tester.ensureVisible(find.text('保存设置'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('保存设置'));
+      await tester.pump();
+      expect(find.text('提交延迟请输入 1–3600 秒'), findsOneWidget);
+      expect(controller.saves, 0);
+      await tester.ensureVisible(_input('提交延迟'));
+      await tester.pumpAndSettle();
+      await tester.enterText(_input('提交延迟'), '45');
+      expect(controller.settings.autoSubmitDelaySeconds, 30);
+      await tester.ensureVisible(find.text('保存设置'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('保存设置'));
+      await tester.pump();
+      expect(controller.saved!.autoSubmitDelaySeconds, 45);
+      await _close(tester, controller);
+    },
+  );
+
+  testWidgets(
     'pending and failed saves keep the effective settings unchanged',
     (tester) async {
       final gate = Completer<void>();

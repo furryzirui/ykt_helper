@@ -33,7 +33,7 @@ class RainApi {
       sendTimeout: const Duration(seconds: 30),
       followRedirects: false,
       headers: {
-        'User-Agent': 'ykt_helper/0.1.3 Android',
+        'User-Agent': 'ykt_helper/1.0.0 Android',
         'Accept': 'application/json',
         'xtbz': 'ykt',
         'x-client': 'app',

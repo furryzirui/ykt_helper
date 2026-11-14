@@ -278,6 +278,7 @@ const defaultAiPrompt = '请使用最简洁的回答完成这道题：{question}
 
 class AppSettings {
   bool autoEnter, autoAnswer, autoSubmit;
+  int autoSubmitDelaySeconds;
   AnswerMode answerMode;
   String fixedAnswer, baseUrl, apiKey, model, customPrompt;
   SlideScope slideScope;
@@ -285,6 +286,7 @@ class AppSettings {
     this.autoEnter = false,
     this.autoAnswer = false,
     this.autoSubmit = false,
+    this.autoSubmitDelaySeconds = 30,
     this.answerMode = AnswerMode.fixed,
     this.fixedAnswer = '',
     this.baseUrl = '',
@@ -297,6 +299,13 @@ class AppSettings {
     autoEnter: truth(json['autoEnter']),
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
+    autoSubmitDelaySeconds: switch (integer(
+      json['autoSubmitDelaySeconds'],
+      30,
+    )) {
+      final seconds when seconds >= 1 && seconds <= 3600 => seconds,
+      _ => 30,
+    },
     answerMode: json['answerMode'] == 'ai' ? AnswerMode.ai : AnswerMode.fixed,
     fixedAnswer: str(json['fixedAnswer']),
     baseUrl: str(json['baseUrl']),
@@ -312,6 +321,7 @@ class AppSettings {
     'autoEnter': autoEnter,
     'autoAnswer': autoAnswer,
     'autoSubmit': autoSubmit,
+    'autoSubmitDelaySeconds': autoSubmitDelaySeconds,
     'answerMode': answerMode.name,
     'fixedAnswer': fixedAnswer,
     'baseUrl': baseUrl,

@@ -378,6 +378,7 @@ void main() {
       controller.settings = AppSettings(
         autoEnter: true,
         autoAnswer: true,
+        autoSubmit: true,
         answerMode: AnswerMode.ai,
         baseUrl: 'https://api.example.com/v1',
         apiKey: 'offline-fixture',

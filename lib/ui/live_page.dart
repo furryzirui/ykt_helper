@@ -516,6 +516,24 @@ class _QuestionCardState extends State<QuestionCard> {
     }
   }
 
+  void _draftEdited() {
+    final question = widget.question;
+    final dynamic answer;
+    if (_optionQuestion) {
+      answer = _choice.toList()..sort();
+    } else if (question.type == 4) {
+      answer = _blanks.map((blank) => blank.text.trim()).toList();
+    } else {
+      answer = {
+        'content': _text.text.trim(),
+        'pics': List<domain.Json>.of(_pics),
+        'videos': <dynamic>[],
+      };
+    }
+    _appliedDraft = jsonEncode(answer);
+    widget.controller.updateAnswerDraft(widget.classroom, question, answer);
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -536,6 +554,9 @@ class _QuestionCardState extends State<QuestionCard> {
             .clamp(0, 86400)
       : null;
   Future<void> _upload() async {
+    // Choosing an image is already a manual takeover; do not let a pending
+    // automatic submission race the system picker or the upload request.
+    _draftEdited();
     final image = await ImagePicker().pickImage(
       source: ImageSource.gallery,
       imageQuality: 90,
@@ -550,7 +571,10 @@ class _QuestionCardState extends State<QuestionCard> {
         widget.classroom,
         image.path,
       );
-      if (mounted) setState(() => _pics.add(result));
+      if (mounted) {
+        setState(() => _pics.add(result));
+        _draftEdited();
+      }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
@@ -651,24 +675,27 @@ class _QuestionCardState extends State<QuestionCard> {
                     title: HtmlContent('${option.key}. ${option.value}'),
                     value: _choice.contains(option.key),
                     onChanged: active && !_submitting
-                        ? (selected) => setState(() {
-                            final multiple =
-                                question.type == 2 ||
-                                question.type == 3 &&
-                                    question.selectionLimit > 1;
-                            if (!multiple) _choice.clear();
-                            if (selected == true) {
-                              if (question.type == 3 &&
-                                  _choice.length >= question.selectionLimit) {
-                                _error = '最多选择 ${question.selectionLimit} 项';
-                                return;
+                        ? (selected) {
+                            setState(() {
+                              final multiple =
+                                  question.type == 2 ||
+                                  question.type == 3 &&
+                                      question.selectionLimit > 1;
+                              if (!multiple) _choice.clear();
+                              if (selected == true) {
+                                if (question.type == 3 &&
+                                    _choice.length >= question.selectionLimit) {
+                                  _error = '最多选择 ${question.selectionLimit} 项';
+                                  return;
+                                }
+                                _choice.add(option.key);
+                              } else {
+                                _choice.remove(option.key);
                               }
-                              _choice.add(option.key);
-                            } else {
-                              _choice.remove(option.key);
-                            }
-                            _error = null;
-                          })
+                              _error = null;
+                            });
+                            _draftEdited();
+                          }
                         : null,
                   ),
               if (question.type == 4)
@@ -679,6 +706,7 @@ class _QuestionCardState extends State<QuestionCard> {
                       controller: _blanks[i],
                       enabled: active && !_submitting,
                       decoration: InputDecoration(labelText: '第 ${i + 1} 空'),
+                      onChanged: (_) => _draftEdited(),
                     ),
                   ),
               if (question.type == 5) ...[
@@ -688,6 +716,7 @@ class _QuestionCardState extends State<QuestionCard> {
                   minLines: 3,
                   maxLines: 8,
                   decoration: const InputDecoration(labelText: '答案'),
+                  onChanged: (_) => _draftEdited(),
                 ),
                 for (var i = 0; i < _pics.length; i++)
                   ListTile(
@@ -697,7 +726,10 @@ class _QuestionCardState extends State<QuestionCard> {
                       tooltip: '移除图片',
                       onPressed: _submitting
                           ? null
-                          : () => setState(() => _pics.removeAt(i)),
+                          : () {
+                              setState(() => _pics.removeAt(i));
+                              _draftEdited();
+                            },
                       icon: const Icon(Icons.close),
                     ),
                   ),
@@ -724,11 +756,7 @@ class _QuestionCardState extends State<QuestionCard> {
                 live.draftAnswers.containsKey(question.id))
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  live.draftAnswers.containsKey(question.id)
-                      ? '答案已填充，待确认提交'
-                      : live.autoStates[question.id]!,
-                ),
+                child: Text(live.autoStates[question.id] ?? '答案已填充，待确认提交'),
               ),
             if (_error != null)
               Padding(

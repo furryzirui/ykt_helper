@@ -1,0 +1,6 @@
+# Copy to key.properties locally, and replace every placeholder.
+# storeFile is relative to the android/ directory.
+storeFile=../.signing/ykt_helper-release.jks
+storePassword=replace-with-your-store-password
+keyAlias=ykt_helper
+keyPassword=replace-with-your-key-password

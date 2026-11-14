@@ -1,6 +1,33 @@
 # 构建说明
 
-常规构建命令见根目录 README。Android 包名 `com.furryzirui.ykt_helper`，最低 API 26，target/compile SDK 36。
+常规构建命令见根目录 README。当前版本 1.0.0+5，Android 包名 `com.furryzirui.ykt_helper`，最低 API 26，target/compile SDK 36。
+
+## 发布签名
+
+未配置发布签名时，`flutter build apk --release` 生成的是调试证书签署的优化测试包，供开发和 CI 使用。GitHub Release 的正式 APK 使用独立发布证书；两种签名不能覆盖安装，CI 产物也不能替代正式包更新。
+
+自行分发时，创建自己的发布密钥，并在本地 `android/key.properties` 配置：
+
+```properties
+storeFile=../.signing/ykt_helper-release.jks
+storePassword=<密钥库密码>
+keyAlias=<密钥别名>
+keyPassword=<密钥密码>
+```
+
+`storeFile` 相对 `android/` 根目录解析，也可以填写绝对路径。示例路径需与实际密钥库一致。配置完整时，Release 构建使用该发布证书；构建正式交付时应额外传入 `-PyktRequireReleaseSigning=true`，缺少发布签名将直接失败，避免误发调试签名包：
+
+```sh
+flutter build apk --release --config-only
+cd android
+./gradlew :app:assembleRelease -PyktRequireReleaseSigning=true
+```
+
+正式构建输出为 `build/app/outputs/apk/release/app-release.apk`。发布前核对 `apksigner verify --verbose --print-certs` 的证书摘要及 `aapt dump badging` 的包名和版本。
+
+本项目的发布私钥和密码只在本地保管，不提供给源码构建者。`.signing/`、`android/key.properties`、密钥库和密码不得加入 Git 或公开源码包。密钥持有人应分别备份私钥及其密码，后续正式更新使用同一证书；丢失后不能继续以原证书签名。
+
+## Windows 构建
 
 Windows 中文项目路径可能影响 Android Release 的 AOT 编译。可用 `subst` 将项目临时映射到空闲的 ASCII 盘符，然后在映射路径执行：
 
@@ -11,7 +38,7 @@ flutter build apk --release --config-only --no-pub
 再在该盘符的 `android` 目录执行：
 
 ```powershell
-.\gradlew.bat :app:assembleRelease --no-daemon '-Pkotlin.incremental=false' '-Pkotlin.compiler.execution.strategy=in-process' --max-workers=4
+.\gradlew.bat :app:assembleRelease -PyktRequireReleaseSigning=true --no-daemon '-Pkotlin.incremental=false' '-Pkotlin.compiler.execution.strategy=in-process' --max-workers=4
 ```
 
 结束后移除临时映射。关闭 Kotlin 增量编译可避免映射盘符与依赖缓存不同盘符导致的缓存错误。直接 Gradle 构建输出在 `build/app/outputs/apk/release/app-release.apk`。
@@ -20,4 +47,4 @@ JDK 若报 `Unable to establish loopback connection`，创建短路径临时目�
 
 Windows 首次运行插件需要符号链接权限，可开启开发者模式；只做 Android 构建时也可按 Flutter 提示修复对应平台生成目录。Linux CI 无此 Windows 符号链接限制。
 
-项目提供 CI 的分析、测试和 APK 构建，不自动创建 GitHub Release。CI 调试签名与本机调试签名不同，不应混用覆盖测试。
+项目提供 CI 的分析、测试和调试签名 APK 构建，不自动创建 GitHub Release。CI 不持有正式发布私钥；CI、本机调试签名与正式签名可能不同，不应混用覆盖测试。

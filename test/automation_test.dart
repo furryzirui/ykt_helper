@@ -37,9 +37,12 @@ class NoBackground extends BackgroundRuntime {
 
 class FakeRain extends RainApi {
   int checkins = 0, submissions = 0;
+  int answerReads = 0;
+  final submittedAnswers = <dynamic>[];
   bool failSubmit = false, failSync = false;
   final decks = <String, Presentation>{};
   Map<String, AnswerRecord> remote = {};
+  Completer<Map<String, AnswerRecord>>? pendingAnswers;
   Completer<ClassroomSession>? pendingCheckin;
   AttendanceStatus attendanceValue = AttendanceStatus.unknown;
   bool failAttendance = false;
@@ -74,8 +77,9 @@ class FakeRain extends RainApi {
     String lessonId,
     String presentationId,
   ) async {
+    answerReads++;
     if (failSync) throw const ApiFailure('test sync unavailable');
-    return remote;
+    return pendingAnswers?.future ?? remote;
   }
 
   @override
@@ -85,6 +89,7 @@ class FakeRain extends RainApi {
     dynamic answer,
   ) async {
     submissions++;
+    submittedAnswers.add(answer);
     if (failSubmit) throw const ApiFailure('test response lost');
   }
 
@@ -174,6 +179,18 @@ void main() {
     controller.account = const Account(id: 'u', name: '测试');
   });
   tearDown(() => controller.dispose());
+  void resetForWidgetTest() {
+    // Create Future chains inside the widget test's fake async zone.
+    controller.dispose();
+    controller = AppController(
+      api: api,
+      store: MemoryStore(),
+      background: NoBackground(),
+      startTimers: false,
+      connectSockets: false,
+    )..account = const Account(id: 'u', name: '测试');
+  }
+
   test(
     'automatic answers only fill a draft until confirmed by default',
     () async {
@@ -424,9 +441,10 @@ void main() {
       expect(results[0].session.bearer, 'b-l');
     },
   );
-  test(
+  testWidgets(
     'duplicate unlock cannot submit twice and the submitted answer survives sync',
-    () async {
+    (tester) async {
+      resetForWidgetTest();
       controller.settings = AppSettings(
         autoAnswer: true,
         autoSubmit: true,
@@ -438,6 +456,11 @@ void main() {
       await controller.processEvent(live, event);
       await controller.processEvent(live, event);
       await controller.syncAnswers(live);
+      await tester.pump(const Duration(seconds: 29));
+      expect(api.submissions, 0);
+      expect(live.draftAnswers['q'], ['A']);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
       expect(api.submissions, 1);
       expect(live.answers['q']!.answer, ['A']);
     },
@@ -487,9 +510,10 @@ void main() {
       expect(api.submissions, 0);
     },
   );
-  test(
+  testWidgets(
     'a lost submit response is not blindly repeated on another event',
-    () async {
+    (tester) async {
+      resetForWidgetTest();
       controller.settings = AppSettings(
         autoAnswer: true,
         autoSubmit: true,
@@ -502,11 +526,378 @@ void main() {
       await controller.processEvent(live, event);
       await controller.processEvent(live, event);
       await controller.syncAnswers(live);
-      await Future<void>.delayed(Duration.zero);
+      await tester.pump(const Duration(seconds: 30));
+      await tester.pump();
+      expect(live.answerSyncError, contains('提交结果未确认'));
+      expect(live.autoStates['q'], contains('自动答题未完成'));
+      await controller.processEvent(live, event);
+      await tester.pump(const Duration(seconds: 30));
       expect(api.submissions, 1);
       expect(live.answers.containsKey('q'), false);
     },
   );
+  test('missing or invalid stored delay defaults to thirty seconds', () {
+    expect(AppSettings().autoSubmitDelaySeconds, 30);
+    expect(AppSettings.fromJson({}).autoSubmitDelaySeconds, 30);
+    expect(
+      AppSettings.fromJson({
+        'autoSubmitDelaySeconds': 0,
+      }).autoSubmitDelaySeconds,
+      30,
+    );
+    final restored = AppSettings.fromJson(
+      AppSettings(autoSubmitDelaySeconds: 47).toJson(),
+    );
+    expect(restored.autoSubmitDelaySeconds, 47);
+  });
+
+  test('saving an invalid automatic submission delay is rejected', () async {
+    await expectLater(
+      controller.saveSettings(
+        AppSettings(
+          autoAnswer: true,
+          autoSubmit: true,
+          fixedAnswer: 'A',
+          autoSubmitDelaySeconds: 0,
+        ),
+      ),
+      throwsA(isA<ApiFailure>()),
+    );
+    expect(controller.settings.autoSubmitDelaySeconds, 30);
+  });
+
+  Future<LiveClass> prepareDelayed(
+    WidgetTester tester, {
+    int delay = 30,
+  }) async {
+    resetForWidgetTest();
+    controller.settings = AppSettings(
+      autoAnswer: true,
+      autoSubmit: true,
+      fixedAnswer: 'A',
+      autoSubmitDelaySeconds: delay,
+    );
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.syncAnswers(live);
+    await controller.processEvent(live, unlock());
+    await tester.pump();
+    return live;
+  }
+
+  testWidgets('custom delay waits fully and does not block another classroom', (
+    tester,
+  ) async {
+    final first = await prepareDelayed(tester, delay: 12);
+    final other = await controller.enter(
+      const Lesson(
+        id: 'l2',
+        courseId: 'c',
+        classroomId: 'cl2',
+        title: '其他课堂',
+        live: true,
+      ),
+    );
+    await controller.processEvent(other, hello());
+    await controller.syncAnswers(other);
+    await controller.processEvent(other, unlock());
+    await tester.pump();
+    expect(first.autoStates['q'], '答案已填充，12 秒后自动提交');
+    expect(other.draftAnswers['q'], ['A']);
+    await tester.pump(const Duration(seconds: 11));
+    expect(api.submissions, 0);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.submissions, 2);
+  });
+
+  testWidgets('closing the question or lesson cancels delayed submission', (
+    tester,
+  ) async {
+    final live = await prepareDelayed(tester);
+    await controller.processEvent(live, {'op': 'problemfinished', 'prob': 'q'});
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 0);
+    final other = await controller.enter(
+      const Lesson(
+        id: 'l2',
+        courseId: 'c',
+        classroomId: 'cl2',
+        title: '其他课堂',
+        live: true,
+      ),
+    );
+    await controller.processEvent(other, hello());
+    await controller.syncAnswers(other);
+    await controller.processEvent(other, unlock());
+    await tester.pump();
+    await controller.processEvent(other, {'op': 'lessonfinished'});
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 0);
+  });
+
+  testWidgets('disabling automation and logout invalidate queued submissions', (
+    tester,
+  ) async {
+    final live = await prepareDelayed(tester);
+    await controller.saveSettings(
+      AppSettings(autoAnswer: true, fixedAnswer: 'A'),
+    );
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 0);
+    expect(live.draftAnswers['q'], ['A']);
+    controller.settings = AppSettings(
+      autoAnswer: true,
+      autoSubmit: true,
+      fixedAnswer: 'A',
+    );
+    await controller.processEvent(
+      live,
+      unlock(dt: DateTime.now().millisecondsSinceEpoch + 1),
+    );
+    await tester.pump();
+    await controller.logout();
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 0);
+    expect(controller.classrooms, isEmpty);
+  });
+
+  testWidgets('remote answers are checked again after the delay', (
+    tester,
+  ) async {
+    final live = await prepareDelayed(tester);
+    final reads = api.answerReads;
+    api.remote = {
+      'q': const AnswerRecord(
+        problemId: 'q',
+        answer: ['B'],
+        source: AnswerSource.server,
+      ),
+    };
+    await tester.pump(const Duration(seconds: 30));
+    await tester.pump();
+    expect(api.answerReads, greaterThan(reads));
+    expect(api.submissions, 0);
+    expect(live.answers['q']!.answer, ['B']);
+    expect(live.draftAnswers, isEmpty);
+  });
+
+  testWidgets('edits preserve the draft and cancel the old automatic answer', (
+    tester,
+  ) async {
+    final live = await prepareDelayed(tester);
+    controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 0);
+    expect(live.draftAnswers['q'], ['B']);
+    expect(live.autoStates['q'], '答案已修改，待确认提交');
+    await controller.syncAnswers(live);
+    expect(live.draftAnswers['q'], ['B']);
+    await controller.submitAnswer(live, live.questions['q']!, ['B']);
+    expect(api.submittedAnswers, [
+      ['B'],
+    ]);
+  });
+
+  testWidgets('manual submission immediately cancels the timer', (
+    tester,
+  ) async {
+    final live = await prepareDelayed(tester);
+    await controller.submitAnswer(live, live.questions['q']!, ['B']);
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 1);
+    expect(api.submittedAnswers, [
+      ['B'],
+    ]);
+  });
+
+  testWidgets('a cancelled final lookup cannot replace a newer manual answer', (
+    tester,
+  ) async {
+    final live = await prepareDelayed(tester);
+    api.pendingAnswers = Completer();
+    await tester.pump(const Duration(seconds: 30));
+    await controller.submitAnswer(live, live.questions['q']!, ['B']);
+    api.pendingAnswers!.complete({
+      'q': const AnswerRecord(
+        problemId: 'q',
+        answer: ['A'],
+        source: AnswerSource.server,
+      ),
+    });
+    await tester.pump();
+    expect(api.submissions, 1);
+    expect(live.answers['q']!.answer, ['B']);
+    expect(live.answers['q']!.source, AnswerSource.local);
+  });
+
+  testWidgets(
+    'a cancelled final lookup failure cannot overwrite manual draft status',
+    (tester) async {
+      final live = await prepareDelayed(tester);
+      api.pendingAnswers = Completer();
+      await tester.pump(const Duration(seconds: 30));
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      api.pendingAnswers!.completeError(const ApiFailure('late query failure'));
+      await tester.pump();
+      expect(api.submissions, 0);
+      expect(live.draftAnswers['q'], ['B']);
+      expect(live.autoStates['q'], '答案已修改，待确认提交');
+    },
+  );
+
+  testWidgets('AI fills a draft then waits the full default delay', (
+    tester,
+  ) async {
+    resetForWidgetTest();
+    controller.dispose();
+    final ai = DeferredAi();
+    controller =
+        AppController(
+            api: api,
+            ai: ai,
+            store: MemoryStore(),
+            background: NoBackground(),
+            startTimers: false,
+            connectSockets: false,
+          )
+          ..account = const Account(id: 'u', name: '测试')
+          ..settings = AppSettings(
+            autoAnswer: true,
+            autoSubmit: true,
+            answerMode: AnswerMode.ai,
+          );
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.syncAnswers(live);
+    await controller.processEvent(live, unlock());
+    ai.result.complete('A');
+    await tester.pump();
+    expect(live.draftAnswers['q'], ['A']);
+    await tester.pump(const Duration(seconds: 29));
+    expect(api.submissions, 0);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.submissions, 1);
+  });
+
+  testWidgets('manual editing while AI generates discards the late AI result', (
+    tester,
+  ) async {
+    resetForWidgetTest();
+    controller.dispose();
+    final ai = DeferredAi();
+    controller =
+        AppController(
+            api: api,
+            ai: ai,
+            store: MemoryStore(),
+            background: NoBackground(),
+            startTimers: false,
+            connectSockets: false,
+          )
+          ..account = const Account(id: 'u', name: '测试')
+          ..settings = AppSettings(
+            autoAnswer: true,
+            autoSubmit: true,
+            answerMode: AnswerMode.ai,
+          );
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.syncAnswers(live);
+    await controller.processEvent(live, unlock());
+    await tester.pump();
+    expect(ai.received, isNotNull);
+    controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+    ai.result.complete('A');
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 0);
+    expect(live.draftAnswers['q'], ['B']);
+    expect(live.autoStates['q'], '答案已修改，待确认提交');
+  });
+
+  testWidgets(
+    'a late AI failure cannot replace a manually edited draft state',
+    (tester) async {
+      resetForWidgetTest();
+      controller.dispose();
+      final ai = DeferredAi();
+      controller =
+          AppController(
+              api: api,
+              ai: ai,
+              store: MemoryStore(),
+              background: NoBackground(),
+              startTimers: false,
+              connectSockets: false,
+            )
+            ..account = const Account(id: 'u', name: '测试')
+            ..settings = AppSettings(
+              autoAnswer: true,
+              autoSubmit: true,
+              answerMode: AnswerMode.ai,
+            );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      await controller.processEvent(live, unlock());
+      await tester.pump();
+      expect(ai.received, isNotNull);
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      ai.result.completeError(const ApiFailure('late AI failure'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 31));
+      expect(api.submissions, 0);
+      expect(live.draftAnswers['q'], ['B']);
+      expect(live.autoStates['q'], '答案已修改，待确认提交');
+    },
+  );
+
+  testWidgets(
+    'closing or editing while final answer check waits prevents POST',
+    (tester) async {
+      final live = await prepareDelayed(tester);
+      api.pendingAnswers = Completer();
+      await tester.pump(const Duration(seconds: 30));
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      await controller.processEvent(live, {
+        'op': 'problemfinished',
+        'prob': 'q',
+      });
+      api.pendingAnswers!.complete({});
+      await tester.pump();
+      expect(api.submissions, 0);
+      expect(live.draftAnswers['q'], ['B']);
+    },
+  );
+
+  testWidgets('insufficient answer time never shortens the configured delay', (
+    tester,
+  ) async {
+    resetForWidgetTest();
+    controller.settings = AppSettings(
+      autoAnswer: true,
+      autoSubmit: true,
+      fixedAnswer: 'A',
+    );
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.syncAnswers(live);
+    await controller.processEvent(live, {
+      'op': 'unlockproblem',
+      'problem': {
+        'prob': 'q',
+        'dt': DateTime.now().millisecondsSinceEpoch,
+        'limit': 10,
+      },
+    });
+    await tester.pump();
+    expect(live.draftAnswers['q'], ['A']);
+    expect(live.autoStates['q'], '答题剩余时间不足，已取消自动提交');
+    await tester.pump(const Duration(seconds: 31));
+    expect(api.submissions, 0);
+  });
   test(
     'old timeline questions do not change the teacher current presentation',
     () async {
