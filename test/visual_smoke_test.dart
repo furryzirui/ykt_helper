@@ -188,12 +188,12 @@ Future<void> _mount(WidgetTester tester, Widget child, double scale) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
-    // Widget tests normally use Ahem. Load a local test-only Chinese font for
-    // screenshots when available; it is neither copied nor bundled in the app.
+    // Normal tests use the same Ahem font on every host. Only optional screenshots
+    // load a local Chinese font; it is neither copied nor bundled in the app.
     final font = File(
       '${Platform.environment['WINDIR'] ?? 'C:/Windows'}/Fonts/msyh.ttc',
     );
-    if (await font.exists()) {
+    if (_screenshots && await font.exists()) {
       final bytes = ByteData.sublistView(await font.readAsBytes());
       await (FontLoader('Roboto')..addFont(Future.value(bytes))).load();
     }
@@ -236,12 +236,17 @@ void main() {
       );
       await tester.pumpAndSettle();
       await _capture(tester, 'classrooms-$suffix');
+      final loadMore = find.widgetWithText(OutlinedButton, '加载更多课堂');
       await tester.scrollUntilVisible(
-        find.text('加载更多课堂'),
+        loadMore,
         180,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.tap(find.text('加载更多课堂'));
+      // ensureVisible changes the scroll offset; render its new position before
+      // hit testing, including when the element was built in the cache area.
+      await tester.pumpAndSettle();
+      expect(loadMore.hitTestable(), findsOneWidget);
+      await tester.tap(loadMore);
       await tester.pumpAndSettle();
       expect(find.text('第 6 次课堂 · 微积分基础'), findsOneWidget);
       expect(tester.takeException(), isNull);
