@@ -4,11 +4,13 @@ import 'dart:convert';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/rain_api.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/services/app_autostart.dart';
+import 'package:ykt_helper/services/app_logs.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 
 class _MemoryStore implements KeyValueStore {
@@ -34,12 +36,22 @@ class _Startup extends AppAutostart {
   Future<void> setSuspended(bool suspended) async => suspensions.add(suspended);
 }
 
+class _Logs extends AppLogs {
+  @override
+  Future<void> initialize() async {}
+}
+
+class _NoDirectories extends PathProviderPlatform {
+  @override
+  Future<String?> getTemporaryPath() async =>
+      throw UnsupportedError('No legacy diagnostics directory in this fixture');
+}
+
 class _Runtime extends BackgroundRuntime {
   bool active = false;
   int exits = 0;
   Future<void>? stopBarrier;
   final requests = <bool>[];
-  final userInitiatedRequests = <bool>[];
   final configurations = <({BackgroundServiceMode mode, DateTime? deadline})>[];
   void Function(BackgroundRuntimeState)? listener;
   BackgroundRuntimeState? restoredState;
@@ -58,11 +70,14 @@ class _Runtime extends BackgroundRuntime {
     DateTime? deadline,
   }) async => configurations.add((mode: mode, deadline: deadline));
   @override
-  Future<BackgroundRuntimeState?> status() async => restoredState;
+  Future<BackgroundRuntimeState?> status() async {
+    if (restoredState != null) active = restoredState!.enabled;
+    return restoredState;
+  }
+
   @override
   Future<bool> setEnabled(bool enabled) async {
     requests.add(enabled);
-    userInitiatedRequests.add(userInitiated);
     active = enabled;
     if (!enabled) await stopBarrier;
     return true;
@@ -145,6 +160,7 @@ class _Harness {
             store: store,
             background: runtime,
             autostart: startup,
+            logs: _Logs(),
             now: clock.now,
             startTimers: false,
             connectSockets: false,
@@ -184,8 +200,16 @@ T _settle<T>(FakeAsync async, Future<T> future) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.android);
-  tearDown(() => debugDefaultTargetPlatformOverride = null);
+  late PathProviderPlatform directories;
+  setUp(() {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    directories = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _NoDirectories();
+  });
+  tearDown(() {
+    PathProviderPlatform.instance = directories;
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   test('timeout defaults to never and old settings retain that default', () {
     expect(AppSettings().serviceTimeoutMinutes, 0);
@@ -229,7 +253,7 @@ void main() {
   });
 
   test(
-    'manual start begins countdown; retry does not extend it; reselection resets it',
+    'manual start resets timeout; only a current-session selection starts a countdown',
     () {
       fakeAsync((async) {
         final h = _Harness(
@@ -237,12 +261,17 @@ void main() {
           settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 10),
         );
         _settle(async, h.controller.setSystemService(true));
+        expect(h.controller.settings.serviceTimeoutMinutes, 0);
+        expect(h.controller.serviceDeadline, isNull);
+        _settle(async, h.controller.setServiceTimeout(10));
         final first = h.controller.serviceDeadline;
         expect(first, DateTime(2026, 11, 18, 10, 10));
         expect(h.controller.serviceRemaining, const Duration(minutes: 10));
         async.elapse(const Duration(minutes: 2));
         _settle(async, h.controller.retryBackground());
         _settle(async, h.controller.retryBackground());
+        _settle(async, h.controller.refresh());
+        _settle(async, h.controller.setSystemService(true));
         expect(h.controller.serviceDeadline, first);
         expect(h.controller.serviceRemaining, const Duration(minutes: 8));
         _settle(async, h.controller.setServiceTimeout(10));
@@ -260,7 +289,159 @@ void main() {
   );
 
   test(
-    'foreground expiry stops Android service and suppresses automatic restart',
+    'automatic startup and finite timeout are mutually exclusive on every platform',
+    () {
+      for (final platform in [
+        TargetPlatform.android,
+        TargetPlatform.iOS,
+        TargetPlatform.windows,
+      ]) {
+        debugDefaultTargetPlatformOverride = platform;
+        fakeAsync((async) {
+          final h = _Harness(
+            async,
+            settings: AppSettings(autoEnter: true, autoStartService: true),
+          );
+          _settle(
+            async,
+            h.controller.setSystemService(true, iosConfirmed: true),
+          );
+          for (final minutes in [10, 120, 1440]) {
+            expect(
+              () => _settle(async, h.controller.setServiceTimeout(minutes)),
+              throwsA(
+                isA<ApiFailure>().having(
+                  (failure) => failure.message,
+                  'reason',
+                  contains('先关闭自动启动服务'),
+                ),
+              ),
+            );
+          }
+          expect(h.controller.settings.serviceTimeoutMinutes, 0);
+          expect(h.controller.serviceDeadline, isNull);
+          _settle(async, h.controller.setServiceTimeout(0));
+          expect(h.runtime.active, isTrue);
+          h.dispose(async);
+        });
+      }
+    },
+  );
+
+  test(
+    'enabling automatic startup clears Dart and native deadlines immediately',
+    () {
+      fakeAsync((async) {
+        final h = _Harness(async);
+        _settle(async, h.controller.setSystemService(true));
+        _settle(async, h.controller.setServiceTimeout(10));
+        expect(h.runtime.configurations.last.deadline, isNotNull);
+        async.elapse(const Duration(minutes: 2));
+        _settle(
+          async,
+          h.controller.saveSettings(
+            AppSettings.fromJson(h.controller.settings.toJson())
+              ..autoStartService = true,
+          ),
+        );
+        expect(h.controller.settings.autoStartService, isTrue);
+        expect(h.controller.settings.serviceTimeoutMinutes, 0);
+        expect(h.controller.serviceDeadline, isNull);
+        expect(h.runtime.configurations.last.deadline, isNull);
+        expect(
+          object(
+            jsonDecode(h.store.values['settings']!),
+          )['serviceTimeoutMinutes'],
+          0,
+        );
+        expect(object(jsonDecode(h.store.values['serviceSession']!)), {
+          'deadlineEpochMs': null,
+          'expired': false,
+        });
+        async.elapse(const Duration(hours: 24));
+        async.flushMicrotasks();
+        expect(h.runtime.active, isTrue);
+        expect(h.runtime.exits, 0);
+        h.dispose(async);
+      });
+    },
+  );
+
+  test(
+    'disabling automatic startup allows a current-session finite timeout',
+    () {
+      fakeAsync((async) {
+        final h = _Harness(
+          async,
+          settings: AppSettings(autoEnter: true, autoStartService: true),
+        );
+        _settle(async, h.controller.setSystemService(true));
+        _settle(
+          async,
+          h.controller.saveSettings(
+            AppSettings.fromJson(h.controller.settings.toJson())
+              ..autoStartService = false,
+          ),
+        );
+        _settle(async, h.controller.setServiceTimeout(10));
+        expect(h.controller.serviceRemaining, const Duration(minutes: 10));
+        async.elapse(const Duration(minutes: 2));
+        _settle(async, h.controller.retryBackground());
+        expect(h.controller.serviceRemaining, const Duration(minutes: 8));
+        h.dispose(async);
+      });
+    },
+  );
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+    test(
+      '${platform.name} restores legacy conflicting startup settings as unlimited',
+      () {
+        debugDefaultTargetPlatformOverride = platform;
+        fakeAsync((async) {
+          final h = _Harness(
+            async,
+            settings: AppSettings(
+              autoEnter: true,
+              autoStartService: true,
+              serviceTimeoutMinutes: 120,
+              iosBackgroundConsentMode: 'silentAudio',
+            ),
+          );
+          h.store.values['settings'] = jsonEncode(
+            h.controller.settings.toJson(),
+          );
+          h.runtime.restoredState = BackgroundRuntimeState(
+            enabled: true,
+            deadline: DateTime(2026, 11, 18, 12),
+          );
+          _settle(async, h.controller.initialize());
+          expect(h.controller.error, isNull);
+          expect(h.controller.settings.autoStartService, isTrue);
+          expect(h.controller.settings.serviceTimeoutMinutes, 0);
+          expect(h.controller.serviceDeadline, isNull);
+          expect(h.runtime.configurations, isNotEmpty);
+          expect(
+            h.runtime.configurations.every((value) => value.deadline == null),
+            isTrue,
+          );
+          expect(
+            object(
+              jsonDecode(h.store.values['settings']!),
+            )['serviceTimeoutMinutes'],
+            0,
+          );
+          async.elapse(const Duration(hours: 3));
+          async.flushMicrotasks();
+          expect(h.runtime.active, isTrue);
+          h.dispose(async);
+        });
+      },
+    );
+  }
+
+  test(
+    'automatic starts discard the saved timeout and running refreshes preserve a selected timer',
     () {
       fakeAsync((async) {
         final h = _Harness(
@@ -268,10 +449,271 @@ void main() {
           settings: AppSettings(
             autoEnter: true,
             autoStartService: true,
-            serviceTimeoutMinutes: 10,
+            serviceTimeoutMinutes: 120,
+          ),
+        );
+        _settle(async, h.controller.retryBackground());
+        expect(h.runtime.active, isTrue);
+        expect(h.controller.settings.serviceTimeoutMinutes, 0);
+        expect(h.controller.serviceDeadline, isNull);
+        expect(
+          object(
+            jsonDecode(h.store.values['settings']!),
+          )['serviceTimeoutMinutes'],
+          0,
+        );
+        _settle(
+          async,
+          h.controller.saveSettings(
+            AppSettings.fromJson(h.controller.settings.toJson())
+              ..autoStartService = false,
           ),
         );
         _settle(async, h.controller.setSystemService(true));
+        _settle(async, h.controller.setServiceTimeout(10));
+        final deadline = h.controller.serviceDeadline;
+        async.elapse(const Duration(minutes: 2));
+        _settle(async, h.controller.refresh());
+        _settle(async, h.controller.retryBackground());
+        expect(h.controller.serviceDeadline, deadline);
+        expect(h.controller.serviceRemaining, const Duration(minutes: 8));
+        _settle(async, h.controller.setSystemService(false));
+        _settle(async, h.controller.retryBackground());
+        expect(h.runtime.active, isFalse);
+        _settle(async, h.controller.setSystemService(true));
+        expect(h.runtime.active, isTrue);
+        expect(h.controller.settings.serviceTimeoutMinutes, 0);
+        expect(h.controller.serviceDeadline, isNull);
+        h.dispose(async);
+      });
+    },
+  );
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+    test(
+      '${platform.name} reattaches a running native countdown unchanged',
+      () {
+        debugDefaultTargetPlatformOverride = platform;
+        fakeAsync((async) {
+          final h = _Harness(
+            async,
+            settings: AppSettings(
+              autoEnter: true,
+              serviceTimeoutMinutes: 10,
+              iosBackgroundConsentMode: 'silentAudio',
+            ),
+          );
+          final deadline = DateTime(2026, 11, 18, 10, 8);
+          h.store.values['settings'] = jsonEncode(
+            h.controller.settings.toJson(),
+          );
+          h.store.values['serviceSession'] = jsonEncode({
+            'deadlineEpochMs': DateTime(2026, 11, 18, 9).millisecondsSinceEpoch,
+            'expired': true,
+          });
+          h.runtime.restoredState = BackgroundRuntimeState(
+            enabled: true,
+            deadline: deadline,
+          );
+          _settle(async, h.controller.initialize());
+          expect(h.controller.error, isNull);
+          expect(h.runtime.active, isTrue);
+          expect(h.controller.serviceDeadline, deadline);
+          expect(h.controller.serviceRemaining, const Duration(minutes: 8));
+          expect(h.controller.settings.serviceTimeoutMinutes, 10);
+          _settle(async, h.controller.retryBackground());
+          expect(h.controller.serviceDeadline, deadline);
+          h.dispose(async);
+        });
+      },
+    );
+
+    test(
+      '${platform.name} new process starts without an old expired countdown',
+      () {
+        debugDefaultTargetPlatformOverride = platform;
+        fakeAsync((async) {
+          final h = _Harness(
+            async,
+            settings: AppSettings(
+              autoEnter: true,
+              autoStartService: true,
+              serviceTimeoutMinutes: 120,
+              iosBackgroundConsentMode: 'silentAudio',
+            ),
+          );
+          h.store.values['settings'] = jsonEncode(
+            h.controller.settings.toJson(),
+          );
+          h.store.values['serviceSession'] = jsonEncode({
+            'deadlineEpochMs': DateTime(2026, 11, 18, 9).millisecondsSinceEpoch,
+            'expired': true,
+          });
+          h.runtime.restoredState = const BackgroundRuntimeState(
+            enabled: false,
+          );
+          _settle(async, h.controller.initialize());
+          expect(h.controller.error, isNull);
+          expect(h.runtime.active, isTrue);
+          expect(h.controller.serviceDeadline, isNull);
+          expect(h.controller.settings.serviceTimeoutMinutes, 0);
+          expect(object(jsonDecode(h.store.values['serviceSession']!)), {
+            'deadlineEpochMs': null,
+            'expired': false,
+          });
+          h.dispose(async);
+        });
+      },
+    );
+  }
+
+  test('native service recreation clears a surviving Flutter countdown', () {
+    fakeAsync((async) {
+      final h = _Harness(async);
+      _settle(async, h.controller.setSystemService(true));
+      _settle(async, h.controller.setServiceTimeout(10));
+      async.elapse(const Duration(minutes: 2));
+      h.runtime.listener!(const BackgroundRuntimeState(enabled: true));
+      async.flushMicrotasks();
+      expect(h.controller.serviceDeadline, isNull);
+      expect(h.controller.settings.serviceTimeoutMinutes, 0);
+      expect(object(jsonDecode(h.store.values['serviceSession']!)), {
+        'deadlineEpochMs': null,
+        'expired': false,
+      });
+      async.elapse(const Duration(hours: 2));
+      async.flushMicrotasks();
+      expect(h.runtime.active, isTrue);
+      h.dispose(async);
+    });
+  });
+
+  test(
+    'unknown native status preserves stored timeout without arming or starting',
+    () {
+      fakeAsync((async) {
+        final h = _Harness(
+          async,
+          settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 10),
+        );
+        h.store.values['settings'] = jsonEncode(h.controller.settings.toJson());
+        final storedSession = jsonEncode({
+          'deadlineEpochMs': DateTime(
+            2026,
+            11,
+            18,
+            10,
+            8,
+          ).millisecondsSinceEpoch,
+          'expired': false,
+        });
+        h.store.values['serviceSession'] = storedSession;
+        final storedSettings = h.store.values['settings'];
+        _settle(async, h.controller.initialize());
+        expect(h.controller.settings.serviceTimeoutMinutes, 10);
+        expect(h.controller.serviceDeadline, isNull);
+        expect(h.controller.backgroundWarning, contains('无法确认'));
+        expect(h.store.values['settings'], storedSettings);
+        expect(h.store.values['serviceSession'], storedSession);
+        expect(h.runtime.requests, isEmpty);
+        async.elapse(const Duration(hours: 1));
+        async.flushMicrotasks();
+        expect(h.runtime.exits, 0);
+        expect(h.runtime.requests, isEmpty);
+        h.dispose(async);
+      });
+    },
+  );
+
+  for (final running in [true, false]) {
+    test(
+      'automatic recovery from unknown status remains unlimited (${running ? 'running' : 'stopped'})',
+      () {
+        fakeAsync((async) {
+          final h = _Harness(
+            async,
+            settings: AppSettings(
+              autoEnter: true,
+              autoStartService: true,
+              serviceTimeoutMinutes: 10,
+            ),
+          );
+          h.store.values['settings'] = jsonEncode(
+            h.controller.settings.toJson(),
+          );
+          _settle(async, h.controller.initialize());
+          final deadline = DateTime(2026, 11, 18, 10, 8);
+          h.runtime.restoredState = BackgroundRuntimeState(
+            enabled: running,
+            deadline: running ? deadline : null,
+          );
+          _settle(async, h.controller.retryBackground());
+          expect(h.runtime.active, isTrue);
+          expect(h.controller.backgroundWarning, isNull);
+          expect(h.controller.serviceDeadline, isNull);
+          expect(h.controller.settings.serviceTimeoutMinutes, 0);
+          h.dispose(async);
+        });
+      },
+    );
+  }
+
+  test(
+    'manual start first stops an unknown session before replacing its timer',
+    () {
+      fakeAsync((async) {
+        final h = _Harness(
+          async,
+          settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 10),
+        );
+        h.store.values['settings'] = jsonEncode(h.controller.settings.toJson());
+        _settle(async, h.controller.initialize());
+        expect(h.runtime.requests, isEmpty);
+        _settle(async, h.controller.setSystemService(true));
+        expect(h.runtime.requests, [false, true]);
+        expect(h.controller.serviceDeadline, isNull);
+        expect(h.controller.settings.serviceTimeoutMinutes, 0);
+        expect(h.runtime.active, isTrue);
+        h.dispose(async);
+      });
+    },
+  );
+
+  test('Windows fresh launches reset a saved countdown to never', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    fakeAsync((async) {
+      final h = _Harness(
+        async,
+        settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 120),
+      );
+      h.store.values['settings'] = jsonEncode(h.controller.settings.toJson());
+      h.store.values['serviceSession'] = jsonEncode({
+        'deadlineEpochMs': DateTime(2026, 11, 18, 11).millisecondsSinceEpoch,
+        'expired': false,
+      });
+      _settle(async, h.controller.initialize());
+      expect(h.controller.error, isNull);
+      expect(h.controller.settings.serviceTimeoutMinutes, 0);
+      expect(h.controller.serviceDeadline, isNull);
+      _settle(async, h.controller.setServiceTimeout(10));
+      final deadline = h.controller.serviceDeadline;
+      _settle(async, h.controller.retryBackground());
+      expect(h.controller.serviceDeadline, deadline);
+      expect(h.controller.serviceRemaining, const Duration(minutes: 10));
+      h.dispose(async);
+    });
+  });
+
+  test(
+    'foreground expiry stops Android service and suppresses automatic restart',
+    () {
+      fakeAsync((async) {
+        final h = _Harness(
+          async,
+          settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 10),
+        );
+        _settle(async, h.controller.setSystemService(true));
+        _settle(async, h.controller.setServiceTimeout(10));
         async.elapse(const Duration(minutes: 10));
         async.flushMicrotasks();
         expect(h.runtime.active, isFalse);
@@ -297,7 +739,8 @@ void main() {
         );
         _settle(async, h.controller.setSystemService(true));
         expect(h.runtime.active, isTrue);
-        expect(h.controller.serviceRemaining, const Duration(minutes: 10));
+        expect(h.controller.serviceRemaining, isNull);
+        expect(h.controller.settings.serviceTimeoutMinutes, 0);
         h.dispose(async);
       });
     },
@@ -312,6 +755,7 @@ void main() {
           settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 10),
         );
         _settle(async, h.controller.setSystemService(true));
+        _settle(async, h.controller.setServiceTimeout(10));
         h.controller.setForeground(false);
         async.elapse(const Duration(minutes: 10));
         async.flushMicrotasks();
@@ -380,13 +824,10 @@ void main() {
       fakeAsync((async) {
         final h = _Harness(
           async,
-          settings: AppSettings(
-            autoEnter: true,
-            autoStartService: true,
-            serviceTimeoutMinutes: 10,
-          ),
+          settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 10),
         );
         _settle(async, h.controller.setSystemService(true));
+        _settle(async, h.controller.setServiceTimeout(10));
         final deadline = h.controller.serviceDeadline;
         h.runtime.active = false;
         h.runtime.listener!(
@@ -457,131 +898,6 @@ void main() {
     },
   );
 
-  test('iOS continued task rejects an unlimited session', () {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    fakeAsync((async) {
-      final h = _Harness(
-        async,
-        settings: AppSettings(
-          autoEnter: true,
-          backgroundMode: BackgroundServiceMode.continuedTask,
-          serviceTimeoutMinutes: 10,
-        ),
-      );
-      expect(
-        () => _settle(async, h.controller.setServiceTimeout(0)),
-        throwsA(isA<ApiFailure>()),
-      );
-      expect(h.controller.settings.serviceTimeoutMinutes, 10);
-      expect(h.store.values, isEmpty);
-      h.controller.settings.serviceTimeoutMinutes = 0;
-      expect(
-        () => _settle(
-          async,
-          h.controller.setSystemService(true, iosConfirmed: true),
-        ),
-        throwsA(isA<ApiFailure>()),
-      );
-      expect(h.runtime.requests.where((enabled) => enabled), isEmpty);
-      expect(h.controller.serviceDeadline, isNull);
-      h.dispose(async);
-    });
-  });
-
-  test('iOS continued task always saves automatic startup as disabled', () {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    fakeAsync((async) {
-      final h = _Harness(async);
-      _settle(
-        async,
-        h.controller.saveSettings(
-          AppSettings(
-            autoEnter: true,
-            autoStartService: true,
-            appAutoStart: true,
-            backgroundMode: BackgroundServiceMode.continuedTask,
-            iosBackgroundConsentMode: 'continuedTask',
-            serviceTimeoutMinutes: 120,
-          ),
-        ),
-      );
-      expect(h.controller.settings.autoStartService, isFalse);
-      expect(h.controller.settings.appAutoStart, isFalse);
-      final persisted = AppSettings.fromJson(
-        object(jsonDecode(h.store.values['settings']!)),
-      );
-      expect(persisted.autoStartService, isFalse);
-      expect(persisted.appAutoStart, isFalse);
-      expect(h.runtime.requests.where((enabled) => enabled), isEmpty);
-      h.dispose(async);
-    });
-  });
-
-  test('saved iOS continued-task consent never starts a fresh session', () {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    fakeAsync((async) {
-      final h = _Harness(
-        async,
-        settings: AppSettings(
-          autoEnter: true,
-          autoStartService: true,
-          backgroundMode: BackgroundServiceMode.continuedTask,
-          iosBackgroundConsentMode: 'continuedTask',
-          serviceTimeoutMinutes: 120,
-        ),
-      );
-      _settle(async, h.controller.retryBackground());
-      _settle(async, h.controller.refresh());
-      expect(h.runtime.active, isFalse);
-      expect(h.runtime.requests.where((enabled) => enabled), isEmpty);
-      expect(h.runtime.userInitiatedRequests, everyElement(isFalse));
-      expect(h.controller.serviceDeadline, isNull);
-      h.dispose(async);
-    });
-  });
-
-  test(
-    'iOS continued task forwards one explicit start and refresh never reissues user intent',
-    () {
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      fakeAsync((async) {
-        final h = _Harness(
-          async,
-          settings: AppSettings(
-            autoEnter: true,
-            backgroundMode: BackgroundServiceMode.continuedTask,
-            serviceTimeoutMinutes: 120,
-          ),
-        );
-        _settle(async, h.controller.setSystemService(true, iosConfirmed: true));
-        expect(h.runtime.active, isTrue);
-        expect(h.runtime.userInitiatedRequests, [true]);
-        expect(h.runtime.userInitiated, isFalse);
-        final deadline = h.controller.serviceDeadline;
-        _settle(async, h.controller.refresh());
-        _settle(async, h.controller.retryBackground());
-        expect(h.runtime.active, isTrue);
-        expect(
-          h.runtime.userInitiatedRequests.where((requested) => requested),
-          hasLength(1),
-        );
-        expect(h.runtime.userInitiated, isFalse);
-        expect(h.controller.serviceDeadline, deadline);
-        h.runtime.active = false;
-        h.runtime.listener!(
-          const BackgroundRuntimeState(enabled: false, reason: 'systemExpired'),
-        );
-        async.flushMicrotasks();
-        final starts = h.runtime.requests.where((enabled) => enabled).length;
-        _settle(async, h.controller.refresh());
-        _settle(async, h.controller.retryBackground());
-        expect(h.runtime.requests.where((enabled) => enabled).length, starts);
-        expect(h.runtime.active, isFalse);
-        h.dispose(async);
-      });
-    },
-  );
-
   test(
     'iOS background expiry stops resources without requesting process exit',
     () {
@@ -592,6 +908,7 @@ void main() {
           settings: AppSettings(autoEnter: true, serviceTimeoutMinutes: 10),
         );
         _settle(async, h.controller.setSystemService(true, iosConfirmed: true));
+        _settle(async, h.controller.setServiceTimeout(10));
         h.controller.setForeground(false);
         async.elapse(const Duration(minutes: 10));
         async.flushMicrotasks();

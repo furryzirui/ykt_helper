@@ -36,11 +36,6 @@
 	<array>
 		<string>audio</string>
 		<string>location</string>
-		<string>processing</string>
-	</array>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER).classroomMonitoring.*</string>
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于选择课堂作答所需图片。</string>

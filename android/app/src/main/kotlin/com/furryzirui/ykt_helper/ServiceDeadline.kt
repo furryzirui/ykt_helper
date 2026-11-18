@@ -39,3 +39,18 @@ internal object ServiceExitPolicy {
         !windowVisible && !foregroundActive &&
             (processImportance == foregroundServiceImportance || processImportance > visibleImportance)
 }
+
+/** Distinguishes a real service restart from a repeated enable/configure call. */
+internal object ServiceStartPolicy {
+    enum class Decision { DENIED, CONTINUE, NEW_SESSION }
+
+    fun restorationAllowed(enabled: Boolean, eligible: Boolean, suspended: Boolean,
+        backgroundAllowed: Boolean): Boolean = enabled && eligible && !suspended && backgroundAllowed
+
+    fun decide(running: Boolean, restoring: Boolean, restoreAllowed: Boolean,
+        backgroundAllowed: Boolean): Decision = when {
+        !backgroundAllowed || restoring && !restoreAllowed -> Decision.DENIED
+        running -> Decision.CONTINUE
+        else -> Decision.NEW_SESSION
+    }
+}

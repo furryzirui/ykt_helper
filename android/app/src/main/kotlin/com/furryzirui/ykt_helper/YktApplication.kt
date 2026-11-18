@@ -29,9 +29,8 @@ class YktApplication : Application() {
         if (!background) {
             // Only a new, user-launched process clears an earlier manual stop.
             // Reattaching an Activity to a running headless engine does not.
-            if (!deadlineExpired(this)) {
-                prefs(this).edit().putBoolean("suspended", false).commit()
-            }
+            if (!ClassroomRuntimeService.isRunning()) configureDeadline(this, null)
+            prefs(this).edit().putBoolean("suspended", false).commit()
         }
         // FlutterEngine's automatic plugin registration includes SecureStorage,
         // whose Android implementation uses only applicationContext.
@@ -199,9 +198,15 @@ class YktApplication : Application() {
         fun prefs(context: Context) = context.getSharedPreferences("ykt_autostart", Context.MODE_PRIVATE)
         fun mayRestore(context: Context): Boolean {
             if (deadlineExpired(context)) return false
+            return mayStartNewSession(context)
+        }
+
+        fun mayStartNewSession(context: Context): Boolean {
             val state = prefs(context)
-            return state.getBoolean("enabled", false) && state.getBoolean("eligible", false) &&
-                !state.getBoolean("suspended", false) && RuntimePermissions.backgroundAllowed(context)
+            return ServiceStartPolicy.restorationAllowed(
+                state.getBoolean("enabled", false), state.getBoolean("eligible", false),
+                state.getBoolean("suspended", false), RuntimePermissions.backgroundAllowed(context)
+            )
         }
 
         private fun bootCount(context: Context): Int = try {

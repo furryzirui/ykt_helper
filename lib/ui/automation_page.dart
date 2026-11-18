@@ -494,7 +494,6 @@ class _AutomationPageState extends State<AutomationPage>
 
   Future<void> _setAutoStartService(bool value) async {
     final mode = _draft!.backgroundMode;
-    if (value && _ios && mode == BackgroundServiceMode.continuedTask) return;
     if (value && !await _confirmBackgroundMode(mode, starting: true)) return;
     if (!mounted) return;
     final settings = _draft!;
@@ -519,11 +518,6 @@ class _AutomationPageState extends State<AutomationPage>
     _edit(() {
       _draft!.backgroundMode = mode;
       if (_ios) _draft!.iosBackgroundConsentMode = mode.name;
-      if (mode == BackgroundServiceMode.continuedTask) {
-        _draft!
-          ..autoStartService = false
-          ..appAutoStart = false;
-      }
     });
   }
 
@@ -533,7 +527,6 @@ class _AutomationPageState extends State<AutomationPage>
             BackgroundServiceMode.silentAudio,
             BackgroundServiceMode.pictureInPicture,
             BackgroundServiceMode.location,
-            BackgroundServiceMode.continuedTask,
           ]
         : [BackgroundServiceMode.native];
     final selected = modes.contains(settings.backgroundMode)
@@ -801,9 +794,6 @@ class _AutomationPageState extends State<AutomationPage>
       final settings = _draft!;
       final windows = _windows;
       final hasAutomation = settings.autoEnter || settings.autoAnswer;
-      final manualBackgroundOnly =
-          _ios &&
-          settings.backgroundMode == BackgroundServiceMode.continuedTask;
       final showAppAutoStart = c.systemServiceSupported || windows;
       return PopScope(
         canPop: _canPop,
@@ -831,17 +821,10 @@ class _AutomationPageState extends State<AutomationPage>
                             Icons.power_settings_new_rounded,
                           ),
                           title: const Text('自动启动服务'),
-                          subtitle: SettingDescription(
-                            manualBackgroundOnly
-                                ? '此方案需每次手动启动'
-                                : '启用自动化时自动启动后台服务',
-                          ),
-                          value:
-                              !manualBackgroundOnly &&
-                              settings.autoStartService,
+                          subtitle: const SettingDescription('启用自动化时自动启动后台服务'),
+                          value: settings.autoStartService,
                           onChanged:
                               _disabled ||
-                                  manualBackgroundOnly ||
                                   !c.systemServiceSupported ||
                                   !(settings.autoEnter || settings.autoAnswer)
                               ? null

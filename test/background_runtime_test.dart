@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,42 +71,6 @@ void main() {
       },
     );
   }
-
-  test(
-    'iOS continued task sends user initiation only for the explicit start',
-    () async {
-      final deadline = DateTime.now().add(const Duration(hours: 2));
-      await runtime.configure(
-        mode: BackgroundServiceMode.continuedTask,
-        deadline: deadline,
-      );
-      runtime.userInitiated = true;
-      expect(await runtime.setEnabled(true), isTrue);
-      runtime.userInitiated = false;
-      expect(await runtime.setEnabled(true), isTrue);
-      expect(await runtime.setEnabled(false), isTrue);
-      final enableCalls = calls
-          .where((call) => call.method == 'setEnabled')
-          .toList();
-      expect(enableCalls, hasLength(3));
-      expect((enableCalls.first.arguments as Map)['userInitiated'], isTrue);
-      for (final call in enableCalls) {
-        expect((call.arguments as Map)['mode'], 'continuedTask');
-        expect(
-          (call.arguments as Map)['deadlineEpochMs'],
-          deadline.millisecondsSinceEpoch,
-        );
-      }
-      expect(
-        enableCalls
-            .skip(1)
-            .every(
-              (call) => !(call.arguments as Map).containsKey('userInitiated'),
-            ),
-        isTrue,
-      );
-    },
-  );
 
   test(
     'Android only uses native mode even when a saved iOS mode is selected',
@@ -233,113 +195,6 @@ void main() {
     expect(await runtime.status(), isNull);
     expect(runtime.enabled, isFalse);
   });
-
-  test(
-    'diagnostics reads only allowlisted state and does not adopt service state',
-    () async {
-      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (
-        call,
-      ) async {
-        calls.add(call);
-        return {
-          'enabled': true,
-          'mode': 'silentAudio',
-          'appState': 'background',
-          'audioPlaying': true,
-          'audioTimeMs': 750,
-          'pipActive': false,
-          'pipFrameCount': 12,
-          'cookie': 'secret',
-          'location': 'private',
-        };
-      });
-      final snapshot = await runtime.diagnostics();
-      expect(snapshot!.toJson(), {
-        'enabled': true,
-        'mode': 'silentAudio',
-        'appState': 'background',
-        'audioPlaying': true,
-        'audioTimeMs': 750,
-        'pipActive': false,
-        'pipFrameCount': 12,
-      });
-      expect(calls.single.method, 'diagnostics');
-      expect(runtime.enabled, false);
-      expect(runtime.failureReason, isNull);
-    },
-  );
-
-  test(
-    'invalid diagnostic snapshots or native errors remain unavailable without leaking text',
-    () async {
-      for (final response in [
-        null,
-        true,
-        {'enabled': 'true', 'mode': 'silentAudio', 'appState': 'background'},
-        {'enabled': true, 'mode': 'secret-cookie', 'appState': 'background'},
-        {'enabled': true, 'mode': 'silentAudio', 'appState': 'secret-key'},
-      ]) {
-        messenger.setMockMethodCallHandler(
-          BackgroundRuntime.channel,
-          (_) async => response,
-        );
-        expect(await runtime.diagnostics(), isNull);
-      }
-      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (_) async {
-        throw PlatformException(code: 'private', message: 'private-token');
-      });
-      expect(await runtime.diagnostics(), isNull);
-      expect(runtime.failureMessage, isNull);
-    },
-  );
-
-  testWidgets(
-    'new diagnostic samples neither overlap nor reuse a timed-out native snapshot',
-    (tester) async {
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
-      final native = Completer<Map<String, Object?>>();
-      var requests = 0;
-      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (
-        call,
-      ) async {
-        requests++;
-        return native.future;
-      });
-      final first = runtime.diagnostics();
-      final second = runtime.diagnostics();
-      await tester.pump();
-      expect(requests, 1);
-      await tester.pump(const Duration(seconds: 3));
-      expect(await first, isNull);
-      expect(await second, isNull);
-      final later = runtime.diagnostics();
-      await tester.pump();
-      expect(requests, 1);
-      native.complete({
-        'enabled': true,
-        'mode': 'silentAudio',
-        'appState': 'background',
-      });
-      await tester.pump();
-      expect(await later, isNull);
-      final fresh = runtime.diagnostics();
-      await tester.pump();
-      expect(requests, 2);
-      expect((await fresh)!.enabled, true);
-      expect(runtime.enabled, false);
-    },
-  );
-
-  for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
-    test(
-      '${platform.name} does not request iOS diagnostic snapshots',
-      () async {
-        debugDefaultTargetPlatformOverride = platform;
-        expect(await runtime.diagnostics(), isNull);
-        expect(calls, isEmpty);
-      },
-    );
-  }
 
   test(
     'native start exception reads failure before cleanup and preserves its message',

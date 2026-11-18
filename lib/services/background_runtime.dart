@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import '../domain/models.dart';
 import 'app_permissions.dart';
-import 'background_diagnostics.dart';
 
 class BackgroundRuntimeState {
   final bool enabled;
@@ -43,10 +42,8 @@ class BackgroundRuntime {
   Future<bool> _operation = Future<bool>.value(true);
   BackgroundServiceMode _mode = BackgroundServiceMode.native;
   DateTime? _deadline;
-  Future<IosBackgroundSnapshot?>? _diagnosticsFlight;
   String? failureReason;
   String? failureMessage;
-  bool userInitiated = false;
   void Function(BackgroundRuntimeState state)? _listener;
   bool get _supported =>
       !kIsWeb &&
@@ -81,7 +78,6 @@ class BackgroundRuntime {
   Map<String, Object?> get _arguments => {
     'mode': _mode.name,
     'deadlineEpochMs': _deadline?.millisecondsSinceEpoch,
-    if (userInitiated) 'userInitiated': true,
   };
 
   Future<void> configure({
@@ -115,30 +111,6 @@ class BackgroundRuntime {
     } on MissingPluginException {
       return null;
     } on PlatformException {
-      return null;
-    }
-  }
-
-  /// Read-only test observation. Do not adopt it as a service state change or
-  /// log platform exceptions: a successful snapshot is not a keepalive result.
-  Future<IosBackgroundSnapshot?> diagnostics() {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
-      return Future.value(null);
-    }
-    // A timed-out platform call cannot be cancelled. Wait until it settles
-    // without passing its old observation to a later sample or service session.
-    if (_diagnosticsFlight != null) return Future.value(null);
-    final flight = _diagnosticsFlight = _readDiagnostics().whenComplete(() {
-      _diagnosticsFlight = null;
-    });
-    return flight.timeout(const Duration(seconds: 3), onTimeout: () => null);
-  }
-
-  Future<IosBackgroundSnapshot?> _readDiagnostics() async {
-    try {
-      final raw = await channel.invokeMethod<Object?>('diagnostics');
-      return IosBackgroundSnapshot.parse(raw);
-    } on Exception {
       return null;
     }
   }

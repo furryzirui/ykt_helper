@@ -1,6 +1,5 @@
 import AVFoundation
 import AVKit
-import BackgroundTasks
 import CoreLocation
 import Flutter
 import UIKit
@@ -12,7 +11,7 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
   AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate,
   CLLocationManagerDelegate {
   private enum Mode: String {
-    case silentAudio, pictureInPicture, continuedTask, location, native
+    case silentAudio, pictureInPicture, location, native
   }
 
   private let channel: FlutterMethodChannel
@@ -32,13 +31,10 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
   private var pipLayer: AVSampleBufferDisplayLayer?
   private var pipView: UIView?
   private var pipFrameTimer: Timer?
-  private var pipFrameCount = 0
   private var pipPossibleObserver: NSKeyValueObservation?
   private var pipStartupTimeout: DispatchWorkItem?
   private var pendingStart: FlutterResult?
   private var pipStartRequested = false
-  private var continuedRuntime: AnyObject?
-  private var continuedStartTimeout: DispatchWorkItem?
   private var notificationTokens: [NSObjectProtocol] = []
 
   init(messenger: FlutterBinaryMessenger) {
@@ -63,12 +59,10 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
           return
         }
         guard self.configure(arguments, result: result) else { return }
-        self.start(userInitiated: arguments["userInitiated"] as? Bool == true, result: result)
+        self.start(result: result)
       case "status":
         self.expireIfNeeded()
         result(self.status())
-      case "diagnostics":
-        result(self.diagnostics())
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -102,10 +96,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
     pipFrameTimer?.invalidate()
     pipStartupTimeout?.cancel()
     pipPossibleObserver?.invalidate()
-    continuedStartTimeout?.cancel()
-    if #available(iOS 26.0, *) {
-      (continuedRuntime as? IOSContinuedClassroomTask)?.finish(success: false)
-    }
     player?.stop()
     locationManager?.stopUpdatingLocation()
     pip?.delegate = nil
@@ -170,22 +160,13 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       }
       if reason == "deadline" { reason = nil; message = nil }
     }
-    if #available(iOS 26.0, *), mode == .continuedTask,
-       let task = continuedRuntime as? IOSContinuedClassroomTask, task.running {
-      guard let deadline = deadlineEpochMs else {
-        stop(reason: "限时课堂监控不能设置为永不关闭", code: "invalidDeadline")
-        return true
-      }
-      task.updateDeadline(epochMs: deadline)
-    }
     if !expireIfNeeded() && (enabled || pendingStart != nil) { scheduleDeadline() }
     return true
   }
 
   private func status() -> [String: Any] {
-    var availableModes = [Mode.native.rawValue, Mode.silentAudio.rawValue,
+    let availableModes = [Mode.native.rawValue, Mode.silentAudio.rawValue,
                           Mode.pictureInPicture.rawValue, Mode.location.rawValue]
-    if #available(iOS 26.0, *) { availableModes.append(Mode.continuedTask.rawValue) }
     var value: [String: Any] = [
       "enabled": enabled, "mode": mode.rawValue,
       "deadlineEpochMs": deadlineEpochMs.map { NSNumber(value: $0) as Any } ?? NSNull(),
@@ -197,29 +178,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
   }
 
   private func notify() { channel.invokeMethod("stateChanged", arguments: status()) }
-
-  /// Read-only snapshots for opt-in test builds. No timer, media control, task
-  /// submission or location reads are introduced by inspecting these values.
-  private func diagnostics() -> [String: Any] {
-    let state: String
-    switch UIApplication.shared.applicationState {
-    case .active: state = "active"
-    case .inactive: state = "inactive"
-    case .background: state = "background"
-    @unknown default: state = "unknown"
-    }
-    var value: [String: Any] = [
-      "enabled": enabled, "mode": mode.rawValue, "appState": state,
-    ]
-    if mode == .silentAudio {
-      value["audioPlaying"] = player?.isPlaying == true
-      value["audioTimeMs"] = Int64(max(0, player?.currentTime ?? 0) * 1000)
-    } else if mode == .pictureInPicture {
-      value["pipActive"] = pip?.isPictureInPictureActive == true
-      value["pipFrameCount"] = pipFrameCount
-    }
-    return value
-  }
 
   @discardableResult
   private func expireIfNeeded() -> Bool {
@@ -250,7 +208,7 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
     RunLoop.main.add(deadlineTimer!, forMode: .common)
   }
 
-  private func start(userInitiated: Bool, result: @escaping FlutterResult) {
+  private func start(result: @escaping FlutterResult) {
     if expireIfNeeded() {
       reason = "deadline"
       message = "后台运行截止时间已到，请重新设置时长"
@@ -287,21 +245,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
         try startPictureInPicture()
         scheduleDeadline()
         return
-      case .continuedTask:
-        guard userInitiated else {
-          throw RuntimeFailure("限时课堂监控需要每次在前台手动开启")
-        }
-        guard let deadline = deadlineEpochMs,
-              Double(deadline) > Date().timeIntervalSince1970 * 1000 else {
-          throw RuntimeFailure("限时课堂监控需要设置有限的运行时长")
-        }
-        guard #available(iOS 26.0, *) else {
-          throw RuntimeFailure("限时课堂监控需要 iOS 26 或更新版本")
-        }
-        pendingStart = result
-        try startContinuedTask(deadline: deadline)
-        scheduleDeadline()
-        return
       case .location:
         guard CLLocationManager.locationServicesEnabled() else {
           throw RuntimeFailure("系统定位服务未开启")
@@ -328,16 +271,9 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       notify()
       result(true)
     } catch {
-      let failure: IOSContinuedTaskFailure
-      if let runtimeError = error as? RuntimeFailure {
-        failure = IOSContinuedTaskFailure(reason: "startFailed", message: runtimeError.message)
-      } else if mode == .continuedTask {
-        failure = IOSContinuedTaskPolicy.failure(for: error)
-      } else {
-        failure = IOSContinuedTaskFailure(reason: "startFailed", message: "后台运行启动失败，请重试")
-      }
+      let message = (error as? RuntimeFailure)?.message ?? "后台运行启动失败，请重试"
       let wasPending = pendingStart != nil
-      stop(reason: failure.message, code: failure.reason)
+      stop(reason: message, code: "startFailed")
       if !wasPending { result(false) }
     }
   }
@@ -360,11 +296,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
     pipPossibleObserver?.invalidate()
     pipPossibleObserver = nil
     pipStartRequested = false
-    continuedStartTimeout?.cancel()
-    continuedStartTimeout = nil
-    if #available(iOS 26.0, *) {
-      (continuedRuntime as? IOSContinuedClassroomTask)?.finish(success: code == "deadline")
-    }
     pipFrameTimer?.invalidate()
     pipFrameTimer = nil
     let previousPip = pip
@@ -420,40 +351,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
     UIApplication.shared.endBackgroundTask(task)
   }
 
-  @available(iOS 26.0, *)
-  private func startContinuedTask(deadline: Int64) throws {
-    let helper: IOSContinuedClassroomTask
-    if let existing = continuedRuntime as? IOSContinuedClassroomTask {
-      helper = existing
-    } else {
-      helper = IOSContinuedClassroomTask()
-      continuedRuntime = helper
-    }
-    try helper.start(deadline: deadline, onStarted: { [weak self] in
-      guard let self = self, self.mode == .continuedTask, self.pendingStart != nil,
-            !self.expireIfNeeded() else { return }
-      self.continuedStartTimeout?.cancel()
-      self.continuedStartTimeout = nil
-      self.enabled = true
-      self.reason = nil
-      self.message = nil
-      self.scheduleDeadline()
-      let completion = self.pendingStart
-      self.pendingStart = nil
-      self.notify()
-      completion?(true)
-    }, onExpired: { [weak self] in
-      self?.stop(reason: "系统已取消限时课堂监控，后台运行已停止", code: "systemExpired")
-    })
-    guard pendingStart != nil else { return }
-    let timeout = DispatchWorkItem { [weak self] in
-      guard let self = self, self.pendingStart != nil, self.mode == .continuedTask else { return }
-      self.stop(reason: "系统未启动限时课堂监控，请稍后手动重试", code: "startFailed")
-    }
-    continuedStartTimeout = timeout
-    DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
-  }
-
   func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
     if player === self.player { stop(reason: "静音音频播放失败，请重新开启", code: "interrupted") }
   }
@@ -489,7 +386,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       throw RuntimeFailure("请返回应用前台后开启画中画")
     }
     try activateAudio()
-    pipFrameCount = 0
     let preview = UIView(frame: CGRect(
       x: max(window.safeAreaInsets.left + 8, window.bounds.width - window.safeAreaInsets.right - 168),
       y: window.safeAreaInsets.top + 64, width: 160, height: 90
@@ -601,7 +497,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       sampleTiming: &timing, sampleBufferOut: &sample
     ) == noErr, let frame = sample else { throw RuntimeFailure("画中画视频帧创建失败") }
     layer.enqueue(frame)
-    pipFrameCount += 1
   }
 
   func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
@@ -672,135 +567,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
     word(samples * 2); word(UInt16(2)); word(UInt16(16)); text("data"); word(dataSize)
     data.append(Data(count: Int(dataSize)))
     return data
-  }
-}
-
-/// A user-started, finite monitoring session. The displayed progress is elapsed
-/// session time, never an invented amount of AI/CPU work or submitted answers.
-@available(iOS 26.0, *)
-private final class IOSContinuedClassroomTask {
-  private var sessionIdentifier: String?
-  private var submitted = false
-  private var task: BGContinuedProcessingTask?
-  private var timer: Timer?
-  private var startEpochMs: Int64 = 0
-  private var startUptime: TimeInterval = 0
-  private var deadlineEpochMs: Int64 = 0
-  private var onStarted: (() -> Void)?
-  private var onExpired: (() -> Void)?
-  var running: Bool { task != nil }
-
-  func start(deadline: Int64, onStarted: @escaping () -> Void,
-             onExpired: @escaping () -> Void) throws {
-    guard !submitted, task == nil else {
-      throw IOSContinuedTaskPolicy.busy
-    }
-    // Signing tools may rewrite CFBundleIdentifier without updating this
-    // compiled plist array. Reject that mismatch before asking the scheduler;
-    // reusing the old prefix would violate Apple's submitting-Bundle-ID rule.
-    let identifierPrefix = try IOSContinuedTaskPolicy.identifierPrefix(
-      bundleIdentifier: Bundle.main.bundleIdentifier,
-      permittedIdentifiers: Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String]
-    )
-    let identifier = identifierPrefix + UUID().uuidString
-    // iOS 26 explicitly permits dynamically registering continued-processing
-    // handlers. The exact request ID lives under the Info.plist wildcard prefix.
-    // A distinct ID is necessary to reject late launches from a cancelled start.
-    // https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtaskrequest/init(identifier:title:subtitle:)
-    let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) {
-      [weak self] incoming in
-      guard let self = self, let continued = incoming as? BGContinuedProcessingTask else {
-        incoming.setTaskCompleted(success: false)
-        return
-      }
-      guard self.submitted, self.sessionIdentifier == identifier,
-            incoming.identifier == identifier, self.task == nil else {
-        incoming.setTaskCompleted(success: false)
-        return
-      }
-      self.task = continued
-      continued.expirationHandler = { [weak self, weak continued] in
-        DispatchQueue.main.async {
-          guard let self = self, let continued = continued,
-                self.sessionIdentifier == identifier, self.task === continued else { return }
-          let callback = self.onExpired
-          self.finish(success: false)
-          callback?()
-        }
-      }
-      self.updateProgress()
-      self.timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
-        guard let self = self, self.sessionIdentifier == identifier else { return }
-        self.updateProgress()
-      }
-      RunLoop.main.add(self.timer!, forMode: .common)
-      let callback = self.onStarted
-      self.onStarted = nil
-      callback?()
-    }
-    guard registered else { throw IOSContinuedTaskPolicy.registrationRejected }
-    self.onStarted = onStarted
-    self.onExpired = onExpired
-    sessionIdentifier = identifier
-    startEpochMs = Int64(Date().timeIntervalSince1970 * 1000)
-    startUptime = ProcessInfo.processInfo.systemUptime
-    deadlineEpochMs = deadline
-    let request = BGContinuedProcessingTaskRequest(
-      identifier: identifier, title: "后台运行中", subtitle: subtitle(elapsedSeconds: 0)
-    )
-    request.strategy = .fail
-    // Empty/default resources permit CPU and networking; no background GPU
-    // entitlement is requested by this monitoring implementation.
-    submitted = true
-    do {
-      try BGTaskScheduler.shared.submit(request)
-    } catch {
-      submitted = false
-      sessionIdentifier = nil
-      self.onStarted = nil
-      self.onExpired = nil
-      throw IOSContinuedTaskPolicy.failure(for: error)
-    }
-  }
-
-  func updateDeadline(epochMs: Int64) {
-    deadlineEpochMs = epochMs
-    updateProgress()
-  }
-
-  private func subtitle(elapsedSeconds: Int64) -> String {
-    let totalMinutes = max(1, Int64(ceil(Double(max(1, deadlineEpochMs - startEpochMs)) / 60_000)))
-    return "已运行 \(max(0, elapsedSeconds) / 60) 分钟 / \(totalMinutes) 分钟"
-  }
-
-  private func updateProgress() {
-    guard let task = task else { return }
-    let totalSeconds = max(1, Int64(ceil(Double(deadlineEpochMs - startEpochMs) / 1000)))
-    let elapsedSeconds = max(0, Int64(ProcessInfo.processInfo.systemUptime - startUptime))
-    task.progress.totalUnitCount = totalSeconds
-    task.progress.completedUnitCount = min(totalSeconds, elapsedSeconds)
-    task.updateTitle("后台运行中", subtitle: subtitle(elapsedSeconds: elapsedSeconds))
-  }
-
-  func finish(success: Bool) {
-    timer?.invalidate()
-    timer = nil
-    let previous = task
-    task = nil
-    let previousIdentifier = sessionIdentifier
-    sessionIdentifier = nil
-    let wasSubmitted = submitted
-    submitted = false
-    previous?.expirationHandler = nil
-    if success, let previous = previous {
-      previous.progress.completedUnitCount = previous.progress.totalUnitCount
-    }
-    previous?.setTaskCompleted(success: success)
-    if wasSubmitted, previous == nil, let identifier = previousIdentifier {
-      BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
-    }
-    onStarted = nil
-    onExpired = nil
   }
 }
 

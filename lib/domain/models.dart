@@ -278,13 +278,7 @@ enum AnswerMode { fixed, ai }
 
 enum SlideScope { none, current, currentAndNext, all }
 
-enum BackgroundServiceMode {
-  native,
-  silentAudio,
-  pictureInPicture,
-  location,
-  continuedTask,
-}
+enum BackgroundServiceMode { native, silentAudio, pictureInPicture, location }
 
 const serviceTimeoutOptions = [0, 10, 120, 1440];
 

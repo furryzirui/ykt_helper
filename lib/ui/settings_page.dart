@@ -116,26 +116,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                         TargetPlatform.iOS;
                                     if (enabled && ios) {
                                       final mode = c.settings.backgroundMode;
-                                      if (mode ==
-                                              BackgroundServiceMode
-                                                  .continuedTask &&
-                                          c.settings.serviceTimeoutMinutes ==
-                                              0) {
-                                        final minutes =
-                                            await selectServiceTimeout(
-                                              context,
-                                              selected: c
-                                                  .settings
-                                                  .serviceTimeoutMinutes,
-                                              allowNever: false,
-                                            );
-                                        if (minutes == null ||
-                                            !context.mounted) {
-                                          return;
-                                        }
-                                        await c.setServiceTimeout(minutes);
-                                        if (!context.mounted) return;
-                                      }
                                       if (!await confirmIosBackgroundService(
                                         context,
                                         mode,
@@ -276,6 +256,7 @@ class _ServiceTimeoutTileState extends State<_ServiceTimeoutTile> {
   }
 
   String get _remaining {
+    if (widget.controller.settings.autoStartService) return '永不';
     final remaining = widget.controller.serviceRemaining;
     if (remaining == null) return '永不';
     final seconds = remaining.inSeconds.clamp(0, 86400);
@@ -288,19 +269,17 @@ class _ServiceTimeoutTileState extends State<_ServiceTimeoutTile> {
   }
 
   Future<void> _select() async {
-    if (_selecting) return;
+    if (_selecting || widget.controller.settings.autoStartService) return;
     setState(() => _selecting = true);
     final controller = widget.controller;
     try {
       final choice = await selectServiceTimeout(
         context,
         selected: controller.settings.serviceTimeoutMinutes,
-        allowNever:
-            defaultTargetPlatform != TargetPlatform.iOS ||
-            controller.settings.backgroundMode !=
-                BackgroundServiceMode.continuedTask,
       );
-      if (choice != null) await controller.setServiceTimeout(choice);
+      if (choice != null && !controller.settings.autoStartService) {
+        await controller.setServiceTimeout(choice);
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -319,7 +298,9 @@ class _ServiceTimeoutTileState extends State<_ServiceTimeoutTile> {
     key: const ValueKey('service-timeout'),
     icon: Icons.timer_outlined,
     title: '定时关闭',
-    description: defaultTargetPlatform == TargetPlatform.windows
+    description: widget.controller.settings.autoStartService
+        ? '请先关闭自动启动服务后设置定时关闭'
+        : defaultTargetPlatform == TargetPlatform.windows
         ? '到时若在后台则退出应用'
         : defaultTargetPlatform == TargetPlatform.iOS
         ? '到时关闭后台服务'
@@ -328,10 +309,17 @@ class _ServiceTimeoutTileState extends State<_ServiceTimeoutTile> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(_remaining, key: const ValueKey('service-countdown')),
-        const SizedBox(width: 4),
-        const Icon(Icons.expand_more_rounded),
+        if (!widget.controller.settings.autoStartService) ...[
+          const SizedBox(width: 4),
+          const Icon(Icons.expand_more_rounded),
+        ],
       ],
     ),
-    onTap: _selecting || widget.controller.backgroundBusy ? null : _select,
+    onTap:
+        _selecting ||
+            widget.controller.backgroundBusy ||
+            widget.controller.settings.autoStartService
+        ? null
+        : _select,
   );
 }

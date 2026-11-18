@@ -29,9 +29,20 @@ class ClassroomRuntimeService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val restoring = intent == null || intent.getBooleanExtra("restoring", false)
-        val expired = YktApplication.deadlineExpired(this)
+        val newSession = !running
         val allowed = RuntimePermissions.backgroundAllowed(this)
-        if (expired || !allowed || restoring && !YktApplication.mayRestore(this)) {
+        val canRestore = !restoring || if (newSession) {
+            YktApplication.mayStartNewSession(this)
+        } else YktApplication.mayRestore(this)
+        val decision = ServiceStartPolicy.decide(running, restoring, canRestore, allowed)
+        // A countdown belongs to the actual running service. A permitted boot
+        // or process-recovery start begins a fresh unlimited session, while a
+        // timer that already suspended automation must remain suspended.
+        if (decision == ServiceStartPolicy.Decision.NEW_SESSION) {
+            YktApplication.configureDeadline(this, null)
+        }
+        val expired = YktApplication.deadlineExpired(this)
+        if (expired || decision == ServiceStartPolicy.Decision.DENIED) {
             lastReason = if (expired) "deadline" else if (!allowed) "permission" else "stopped"
             running = false
             finishStart(false)
@@ -142,6 +153,8 @@ class ClassroomRuntimeService : Service() {
         private val handler = Handler(Looper.getMainLooper())
         private var instance: ClassroomRuntimeService? = null
         private var lastReason: String? = null
+
+        fun isRunning(): Boolean = instance?.running == true
 
         private fun finishStart(success: Boolean) {
             val pending = starts.toList()

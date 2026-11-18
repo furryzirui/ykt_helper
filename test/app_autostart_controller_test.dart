@@ -79,7 +79,8 @@ class _Background extends BackgroundRuntime {
     DateTime? deadline,
   }) async {}
   @override
-  Future<BackgroundRuntimeState?> status() async => null;
+  Future<BackgroundRuntimeState?> status() async =>
+      BackgroundRuntimeState(enabled: active);
 
   final bool available;
   final requests = <bool>[];

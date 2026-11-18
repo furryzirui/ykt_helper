@@ -2,6 +2,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/domain/models.dart';
 
 void main() {
+  test(
+    'removed test mode falls back to silent audio and requires fresh consent',
+    () {
+      final settings = AppSettings.fromJson({
+        'backgroundMode': 'continuedTask',
+        'iosBackgroundConsentMode': 'continuedTask',
+      });
+      expect(settings.backgroundMode, BackgroundServiceMode.silentAudio);
+      expect(
+        settings.iosBackgroundConsentMode,
+        isNot(settings.backgroundMode.name),
+      );
+    },
+  );
+
   test('new answer and startup settings persist with independent defaults', () {
     final fresh = AppSettings();
     expect(fresh.fixedSingleAnswer, 'A');

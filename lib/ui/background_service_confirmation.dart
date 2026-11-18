@@ -7,7 +7,6 @@ String backgroundServiceModeLabel(BackgroundServiceMode mode) => switch (mode) {
   BackgroundServiceMode.silentAudio => '静音音频保活',
   BackgroundServiceMode.pictureInPicture => '画中画保活',
   BackgroundServiceMode.location => '持续定位保活',
-  BackgroundServiceMode.continuedTask => 'iOS 26 长任务（实验）',
 };
 
 Future<bool> confirmIosBackgroundService(
@@ -22,8 +21,6 @@ Future<bool> confirmIosBackgroundService(
       '将开启画中画浮窗以尝试维持后台运行。关闭浮窗、锁屏、系统回收或其他播放器可能使服务停止；请保持浮窗开启。',
     BackgroundServiceMode.location =>
       '将持续使用设备定位以尝试维持后台运行，可能明显增加耗电并显示定位指示。需要允许后台定位；定位服务关闭、权限变化或系统暂停定位可能使服务停止。定位数据不会用于课堂签到或上传。',
-    BackgroundServiceMode.continuedTask =>
-      '仅适用于 iOS 26。将执行有明确结束时间的课堂监控，并通过系统长任务进度显示运行状态；每次必须在前台手动启动，不能自动启动或无限期运行。系统可能拒绝启动或在倒计时结束前提前终止任务，所选时间不代表系统保证的运行时长。',
     BackgroundServiceMode.native => '当前模式不能保证 iOS 持续后台运行。',
   };
   return await showDialog<bool>(

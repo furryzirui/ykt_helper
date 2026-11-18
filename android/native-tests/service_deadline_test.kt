@@ -55,5 +55,32 @@ fun main() {
     check(ServiceExitPolicy.canExit(false, false, 125, 200, 125)); checks++
     check(ServiceExitPolicy.canExit(false, false, 230, 200, 125)); checks++
     check(ServiceExitPolicy.canExit(false, false, 400, 200, 125)); checks++
+    fun start(expected: ServiceStartPolicy.Decision, running: Boolean, restoring: Boolean,
+        enabled: Boolean = true, eligible: Boolean = true, suspended: Boolean = false,
+        allowed: Boolean = true) {
+        val restoreAllowed = ServiceStartPolicy.restorationAllowed(enabled, eligible, suspended, allowed)
+        check(ServiceStartPolicy.decide(running, restoring, restoreAllowed, allowed) == expected)
+        checks++
+    }
+    // Repeated enable, Activity reattachment and receiver messages cannot clear
+    // a user-selected countdown on a service that is actually still running.
+    start(ServiceStartPolicy.Decision.CONTINUE, running = true, restoring = false)
+    start(ServiceStartPolicy.Decision.CONTINUE, running = true, restoring = true)
+    // New manual, boot and killed-service recovery sessions begin unlimited.
+    start(ServiceStartPolicy.Decision.NEW_SESSION, running = false, restoring = false)
+    start(ServiceStartPolicy.Decision.NEW_SESSION, running = false, restoring = true)
+    // Manual service start does not require enabling application auto-start.
+    start(ServiceStartPolicy.Decision.NEW_SESSION, running = false, restoring = false,
+        enabled = false, eligible = false)
+    // An expired timer/manual stop sets suspended. A boot or sticky recovery
+    // must not clear that state in order to manufacture a new unlimited session.
+    start(ServiceStartPolicy.Decision.DENIED, running = false, restoring = true, suspended = true)
+    start(ServiceStartPolicy.Decision.DENIED, running = true, restoring = true, suspended = true)
+    start(ServiceStartPolicy.Decision.DENIED, running = false, restoring = true, enabled = false)
+    start(ServiceStartPolicy.Decision.DENIED, running = false, restoring = true, eligible = false)
+    // Neither manual requests nor repeated requests bypass revoked OS permission.
+    start(ServiceStartPolicy.Decision.DENIED, running = false, restoring = false, allowed = false)
+    start(ServiceStartPolicy.Decision.DENIED, running = true, restoring = false, allowed = false)
+    start(ServiceStartPolicy.Decision.DENIED, running = false, restoring = true, allowed = false)
     println("Android service deadline: $checks checks passed")
 }

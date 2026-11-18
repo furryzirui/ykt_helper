@@ -199,6 +199,71 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  for (final platform in [
+    TargetPlatform.android,
+    TargetPlatform.iOS,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets('${platform.name}自动启动服务时定时显示永不并禁用，关闭后可重新选择', (tester) async {
+      debugDefaultTargetPlatformOverride = platform;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final controller = _Controller(_Background()..active = true)
+        ..deadline = DateTime.now().add(const Duration(minutes: 10));
+      controller.settings.autoStartService = true;
+      await _show(tester, SettingsPage(controller: controller));
+      final tile = find.descendant(
+        of: find.byKey(const ValueKey('service-timeout')),
+        matching: find.byType(ListTile),
+      );
+      expect(tester.widget<ListTile>(tile).onTap, isNull);
+      expect(find.text('请先关闭自动启动服务后设置定时关闭'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('service-countdown')))
+            .data,
+        '永不',
+      );
+      await controller.saveSettings(
+        AppSettings.fromJson(controller.settings.toJson())
+          ..autoStartService = false,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<ListTile>(tile).onTap, isNotNull);
+      await tester.tap(find.byKey(const ValueKey('service-timeout')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('service-timeout-10')), findsOneWidget);
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      await tester.binding.setSurfaceSize(null);
+    });
+  }
+
+  testWidgets('定时弹窗期间启用自动启动服务则丢弃先前时间选择', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final controller = _Controller(_Background()..active = true);
+    await _show(tester, SettingsPage(controller: controller));
+    await tester.tap(find.byKey(const ValueKey('service-timeout')));
+    await tester.pumpAndSettle();
+    await controller.saveSettings(
+      AppSettings.fromJson(controller.settings.toJson())
+        ..autoStartService = true,
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('service-timeout-10')));
+    await tester.pumpAndSettle();
+    expect(controller.choices, isEmpty);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('service-countdown'))).data,
+      '永不',
+    );
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await tester.binding.setSurfaceSize(null);
+  });
+
   testWidgets('iOS每次手动启用均确认，取消不启动', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -346,91 +411,56 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
-  testWidgets('iOS26长任务选择不会启动，自动启动常驻禁用', (tester) async {
+  testWidgets('iOS后台方案只保留三项且均允许永不定时', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    final controller = _Controller(_Background());
-    controller.settings.autoStartService = true;
+    final controller = _Controller(_Background()..active = true);
     await _show(tester, AutomationPage(controller: controller));
     await tester.tap(
       find.byType(DropdownButtonFormField<BackgroundServiceMode>),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('iOS 26 长任务（实验）').last);
-    await tester.pumpAndSettle();
-    expect(find.textContaining('不能自动启动或无限期运行'), findsOneWidget);
-    await tester.tap(find.text('确认选择'));
-    await tester.pumpAndSettle();
-    expect(
-      controller.settings.backgroundMode,
-      BackgroundServiceMode.continuedTask,
+    final menu = tester.widget<DropdownButton<BackgroundServiceMode>>(
+      find.byType(DropdownButton<BackgroundServiceMode>),
     );
-    expect(controller.settings.iosBackgroundConsentMode, 'continuedTask');
-    expect(controller.settings.autoStartService, false);
-    expect(controller.starts, 0);
+    expect(menu.items!.map((item) => item.value), [
+      BackgroundServiceMode.silentAudio,
+      BackgroundServiceMode.pictureInPicture,
+      BackgroundServiceMode.location,
+    ]);
+    for (final label in ['静音音频保活', '画中画保活', '持续定位保活']) {
+      expect(find.text(label).hitTestable(), findsOneWidget);
+    }
+    expect(find.textContaining('长任务'), findsNothing);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
     final autoStart = tester.widget<SwitchListTile>(
       find.byKey(const ValueKey('auto-start-service')),
     );
-    expect(autoStart.value, false);
-    expect(autoStart.onChanged, isNull);
-    expect(find.text('此方案需每次手动启动'), findsOneWidget);
+    expect(autoStart.onChanged, isNotNull);
     await tester.pumpWidget(const SizedBox());
-    controller.dispose();
-    await tester.binding.setSurfaceSize(null);
-  });
-
-  testWidgets('iOS26长任务手动启用先选有限时间，每次确认且定时菜单无永不', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    final controller = _Controller(_Background());
-    controller.settings.backgroundMode = BackgroundServiceMode.continuedTask;
-    await _show(tester, SettingsPage(controller: controller));
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
-    expect(find.byType(SimpleDialog), findsOneWidget);
-    for (final value in [10, 120, 1440]) {
-      expect(find.byKey(ValueKey('service-timeout-$value')), findsOneWidget);
+    for (final mode in [
+      BackgroundServiceMode.silentAudio,
+      BackgroundServiceMode.pictureInPicture,
+      BackgroundServiceMode.location,
+    ]) {
+      controller.settings.backgroundMode = mode;
+      await _show(tester, SettingsPage(controller: controller));
+      await tester.tap(find.byKey(const ValueKey('service-timeout')));
+      await tester.pumpAndSettle();
+      for (final minutes in [10, 120, 1440, 0]) {
+        expect(
+          find.byKey(ValueKey('service-timeout-$minutes')),
+          findsOneWidget,
+        );
+      }
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
     }
-    expect(find.byKey(const ValueKey('service-timeout-0')), findsNothing);
-    expect(controller.starts, 0);
-    await tester.tapAt(const Offset(5, 5));
-    await tester.pumpAndSettle();
-    expect(controller.choices, isEmpty);
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('service-timeout-120')));
-    await tester.pumpAndSettle();
-    expect(controller.choices, [120]);
-    expect(find.byType(AlertDialog), findsOneWidget);
-    expect(find.textContaining('所选时间不代表系统保证的运行时长'), findsOneWidget);
-    expect(controller.starts, 0);
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    expect(controller.starts, 0);
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
-    expect(find.byType(SimpleDialog), findsNothing);
-    await tester.tap(find.text('确认开启'));
-    await tester.pumpAndSettle();
-    expect(controller.starts, 1);
-    await tester.tap(find.byKey(const ValueKey('service-timeout')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('service-timeout-0')), findsNothing);
-    await tester.tapAt(const Offset(5, 5));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
-    expect(controller.starts, 1);
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    await tester.pumpWidget(const SizedBox());
     controller.dispose();
     await tester.binding.setSurfaceSize(null);
   });
-
   testWidgets('iOS定位保活权限经解释请求，其他模式显示无需授权', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);

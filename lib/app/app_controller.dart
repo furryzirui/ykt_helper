@@ -13,7 +13,6 @@ import '../services/ai_answer.dart';
 import '../services/app_logs.dart';
 import '../services/app_autostart.dart';
 import '../services/background_runtime.dart';
-import '../services/background_diagnostics.dart';
 import '../services/gallery_saver.dart';
 import '../services/file_export.dart';
 import '../services/slide_export.dart';
@@ -87,7 +86,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   final GallerySaver gallery;
   final AppLogs logs;
   final bool startTimers, connectSockets;
-  final bool iosBackgroundDiagnostics;
   final DateTime Function() now;
   final Dio _media = Dio(
     BaseOptions(
@@ -127,9 +125,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   bool _foreground = true, _serviceTransition = false, _expiringService = false;
   int _lifecycleRevision = 0;
   Timer? _serviceTimer;
-  Timer? _backgroundDiagnosticTimer;
-  int _backgroundDiagnosticEpoch = 0;
-  bool _backgroundDiagnosticInFlight = false;
   bool get _windows =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
   bool get _ios => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
@@ -146,6 +141,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   // wins over auto-start until the user explicitly turns the service on again.
   bool _serviceManuallyDisabled = false;
   bool _serviceManuallyEnabled = false;
+  bool _nativeServiceStateUnknown = false;
   bool _resumeLoginPending = false;
   Future<void> _startupOperations = Future<void>.value();
   Future<void> _settingsOperations = Future<void>.value();
@@ -165,7 +161,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     AppLogs? logs,
     this.startTimers = true,
     this.connectSockets = true,
-    this.iosBackgroundDiagnostics = iosBackgroundDiagnosticsEnabled,
     DateTime Function()? now,
   }) : now = now ?? DateTime.now,
        store = store ?? SecureStore(),
@@ -173,8 +168,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
        background = background ?? BackgroundRuntime(),
        autostart = autostart ?? const AppAutostart(),
        gallery = gallery ?? const GallerySaver(),
-       logs =
-           logs ?? AppLogs(iosBackgroundDiagnostics: iosBackgroundDiagnostics) {
+       logs = logs ?? AppLogs() {
     this.api =
         api ??
         RainApi(
@@ -187,63 +181,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
   void _notify() {
     if (!_disposed) notifyListeners();
-  }
-
-  bool get _backgroundDiagnosticsNeeded =>
-      iosBackgroundDiagnostics &&
-      _ios &&
-      !_disposed &&
-      account != null &&
-      background.enabled &&
-      !_serviceManuallyDisabled &&
-      !_deadlineExpired &&
-      (settings.autoEnter || settings.autoAnswer);
-
-  void _stopBackgroundDiagnostics() {
-    _backgroundDiagnosticTimer?.cancel();
-    _backgroundDiagnosticTimer = null;
-    _backgroundDiagnosticEpoch++;
-  }
-
-  void _scheduleBackgroundDiagnostics() {
-    if (!_backgroundDiagnosticsNeeded) {
-      _stopBackgroundDiagnostics();
-      return;
-    }
-    if (_backgroundDiagnosticTimer != null || _backgroundDiagnosticInFlight) {
-      return;
-    }
-    final epoch = _backgroundDiagnosticEpoch;
-    // One-shot scheduling never invents missed observations after suspension.
-    _backgroundDiagnosticTimer = Timer(const Duration(seconds: 10), () {
-      _backgroundDiagnosticTimer = null;
-      unawaited(_sampleBackgroundDiagnostics(epoch));
-    });
-  }
-
-  Future<void> _sampleBackgroundDiagnostics(int epoch) async {
-    if (epoch != _backgroundDiagnosticEpoch || !_backgroundDiagnosticsNeeded) {
-      return;
-    }
-    _backgroundDiagnosticInFlight = true;
-    final mode = _runtimeMode;
-    logs.addBackgroundHeartbeat(mode: mode, foreground: _foreground);
-    IosBackgroundSnapshot? snapshot;
-    try {
-      snapshot = await background.diagnostics().timeout(
-        const Duration(seconds: 3),
-      );
-    } catch (_) {
-      // Test diagnostics must never change automation or expose native errors.
-    } finally {
-      _backgroundDiagnosticInFlight = false;
-    }
-    if (epoch == _backgroundDiagnosticEpoch &&
-        mode == _runtimeMode &&
-        _backgroundDiagnosticsNeeded) {
-      logs.addBackgroundSnapshot(mode: mode, snapshot: snapshot);
-    }
-    _scheduleBackgroundDiagnostics();
   }
 
   bool _valid(LiveClass live) =>
@@ -328,31 +265,77 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _restoreServiceSession() async {
+    if (settings.autoStartService && settings.serviceTimeoutMinutes != 0) {
+      final next = AppSettings.fromJson(settings.toJson())
+        ..serviceTimeoutMinutes = 0;
+      await _write('settings', jsonEncode(next.toJson()));
+      settings = next;
+    }
     if (_windows) {
-      _serviceDeadline = settings.serviceTimeoutMinutes == 0
-          ? null
-          : now().add(Duration(minutes: settings.serviceTimeoutMinutes));
-      _armServiceTimer();
+      // A desktop process launch is a new session, including login startup.
+      await _resetServiceTimeout();
       return;
     }
-    final raw = await store.read('serviceSession');
-    if (raw != null) {
-      final value = object(jsonDecode(raw));
-      final ms = value['deadlineEpochMs'];
-      _nativeDeadlineExpired = value['expired'] == true;
-      if (ms is num) {
-        _serviceDeadline = DateTime.fromMillisecondsSinceEpoch(ms.toInt());
-      }
+    if (settings.autoStartService) {
+      // Migrate older installations that allowed both options. Removing an
+      // obsolete deadline never starts a service or assumes it is running.
+      await background.configure(mode: _runtimeMode, deadline: null);
     }
     final native = await background.status();
-    _serviceDeadline ??= native?.deadline;
-    _nativeDeadlineExpired =
-        _nativeDeadlineExpired || native?.reason == 'deadline';
-    if (_deadlineExpired || native?.reason == 'deadline') {
+    if (native == null) {
+      // A failed status read is neither a stopped service nor permission to
+      // replace its timer. Wait for a known status or an explicit stop/start.
+      _nativeServiceStateUnknown = true;
+      return;
+    }
+    await _adoptNativeServiceSession(native);
+  }
+
+  Future<void> _adoptNativeServiceSession(BackgroundRuntimeState native) async {
+    _nativeServiceStateUnknown = false;
+    if (!native.enabled) {
+      // The previous timer belongs to the previous service, never the next
+      // automatic/manual start. A surviving native service remains authoritative.
+      await _resetServiceTimeout();
+      return;
+    }
+    if (settings.autoStartService) {
+      _serviceManuallyEnabled = true;
+      await _resetServiceTimeout();
+      await background.configure(mode: _runtimeMode, deadline: null);
+      return;
+    }
+    _serviceDeadline = native.deadline;
+    _serviceManuallyEnabled = true;
+    _nativeDeadlineExpired = native.reason == 'deadline';
+    if (_serviceDeadline == null && settings.serviceTimeoutMinutes != 0) {
+      final next = AppSettings.fromJson(settings.toJson())
+        ..serviceTimeoutMinutes = 0;
+      await _write('settings', jsonEncode(next.toJson()));
+      settings = next;
+    }
+    if (_deadlineExpired) {
       _serviceManuallyDisabled = true;
       await autostart.setSuspended(true);
     }
+    await _persistServiceSession();
     _armServiceTimer();
+  }
+
+  Future<void> _resetServiceTimeout() async {
+    _serviceTimer?.cancel();
+    _serviceTimer = null;
+    _serviceDeadline = null;
+    _nativeDeadlineExpired = false;
+    _serviceExpiryHandled = false;
+    _windowsExitPending = false;
+    if (settings.serviceTimeoutMinutes != 0) {
+      final next = AppSettings.fromJson(settings.toJson())
+        ..serviceTimeoutMinutes = 0;
+      await _write('settings', jsonEncode(next.toJson()));
+      settings = next;
+    }
+    await _persistServiceSession();
   }
 
   Future<void> _persistServiceSession() => _write(
@@ -379,15 +362,14 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (!serviceTimeoutOptions.contains(minutes)) {
       throw const ApiFailure('无法识别定时关闭选项');
     }
-    if (_ios &&
-        settings.backgroundMode == BackgroundServiceMode.continuedTask &&
-        minutes == 0) {
-      throw const ApiFailure('iOS 26 长任务必须选择结束时间');
+    if (minutes != 0 && settings.autoStartService) {
+      throw const ApiFailure('请先关闭自动启动服务，再设置定时关闭');
     }
     final next = AppSettings.fromJson(settings.toJson())
       ..serviceTimeoutMinutes = minutes;
     await saveSettings(next);
     if (_disposed) return;
+    if (settings.autoStartService) return;
     if (_windows || backgroundEnabled) {
       _nativeDeadlineExpired = false;
       _serviceExpiryHandled = false;
@@ -413,7 +395,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     _expiringService = true;
-    _stopBackgroundDiagnostics();
     _serviceTimer?.cancel();
     _serviceExpiryHandled = true;
     if (_windows && _foreground) {
@@ -453,12 +434,18 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   void _runtimeStateChanged(BackgroundRuntimeState state) {
     if (_disposed) return;
-    if (!state.enabled) {
-      _stopBackgroundDiagnostics();
-    } else if (!_serviceTransition && !_expiringService) {
-      _scheduleBackgroundDiagnostics();
-    }
     if (_serviceTransition || _expiringService) return;
+    if (state.enabled &&
+        state.deadline == null &&
+        (_serviceDeadline != null || settings.serviceTimeoutMinutes != 0)) {
+      // Android can recreate its service while the shared Flutter engine
+      // survives. The native unlimited session replaces the old Dart timer.
+      unawaited(
+        _resetServiceTimeout().then((_) => _notify()).catchError((Object _) {
+          logs.add(AppLogEvent.background, success: false);
+        }),
+      );
+    }
     if (state.reason == 'deadline' || _deadlineExpired) {
       _nativeDeadlineExpired = true;
       _serviceDeadline = state.deadline ?? _serviceDeadline ?? now();
@@ -614,7 +601,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> logout() async {
-    _stopBackgroundDiagnostics();
     logs.add(AppLogEvent.logout);
     _generation++;
     _backgroundRevision++;
@@ -740,10 +726,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       candidate.autoStartService = false;
       candidate.appAutoStart = false;
     }
-    if (_ios &&
-        candidate.backgroundMode == BackgroundServiceMode.continuedTask) {
-      candidate.autoStartService = false;
-    }
+    if (candidate.autoStartService) candidate.serviceTimeoutMinutes = 0;
     if (!autostart.supported ||
         backgroundSupported && !candidate.autoStartService) {
       candidate.appAutoStart = false;
@@ -766,7 +749,14 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     await _write('settings', jsonEncode(candidate.toJson()));
     if (_disposed) return;
     settings = candidate;
-    _stopBackgroundDiagnostics();
+    if (candidate.autoStartService) {
+      await _resetServiceTimeout();
+      try {
+        await background.configure(mode: _runtimeMode, deadline: null);
+      } catch (_) {
+        logs.add(AppLogEvent.background, success: false);
+      }
+    }
     if (!candidate.autoEnter && !candidate.autoAnswer && !_windows) {
       _serviceTimer?.cancel();
       _serviceDeadline = null;
@@ -797,7 +787,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     bool iosConfirmed = false,
   }) async {
     if (!backgroundSupported) return;
-    if (!enabled) _stopBackgroundDiagnostics();
     if (enabled && !(settings.autoEnter || settings.autoAnswer)) {
       throw const ApiFailure('请先开启至少一项自动化');
     }
@@ -805,11 +794,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (enabled && _ios && !iosConfirmed) {
       throw const ApiFailure('请先确认 iOS 后台运行限制');
     }
-    if (enabled &&
-        _ios &&
-        settings.backgroundMode == BackgroundServiceMode.continuedTask &&
-        settings.serviceTimeoutMinutes == 0) {
-      throw const ApiFailure('iOS 26 长任务必须选择结束时间');
+    if (_nativeServiceStateUnknown) {
+      if (!await background.setEnabled(false)) {
+        throw const ApiFailure('无法停止状态未知的后台服务，请稍后重试');
+      }
+      _nativeServiceStateUnknown = false;
     }
     if (enabled && _ios) {
       final candidate = AppSettings.fromJson(settings.toJson())
@@ -817,19 +806,22 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       await _write('settings', jsonEncode(candidate.toJson()));
       settings = candidate;
     }
-    _nativeDeadlineExpired = false;
-    _serviceExpiryHandled = false;
-    _windowsExitPending = false;
-    _serviceDeadline = enabled && settings.serviceTimeoutMinutes > 0
-        ? now().add(Duration(minutes: settings.serviceTimeoutMinutes))
-        : null;
-    await _persistServiceSession();
-    _armServiceTimer();
+    if (enabled && (!background.enabled || _deadlineExpired)) {
+      await _resetServiceTimeout();
+    } else if (!enabled) {
+      _serviceTimer?.cancel();
+      _serviceTimer = null;
+      _serviceDeadline = null;
+      _nativeDeadlineExpired = false;
+      _serviceExpiryHandled = false;
+      _windowsExitPending = false;
+      await _persistServiceSession();
+    }
     await autostart.setSuspended(!enabled);
     _serviceManuallyDisabled = !enabled;
     _serviceManuallyEnabled = enabled;
     _notify();
-    await _updateBackground(userInitiated: enabled && iosConfirmed);
+    await _updateBackground();
     if (!enabled && !_automaticAllowed) _pauseClassroomWork();
   }
 
@@ -864,17 +856,27 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     return operation;
   }
 
-  Future<void> _updateBackground({bool userInitiated = false}) {
+  Future<void> _updateBackground() {
     final operation = _backgroundOperations
         .catchError((Object _) {})
-        .then((_) => _performUpdateBackground(userInitiated: userInitiated));
+        .then((_) => _performUpdateBackground());
     _backgroundOperations = operation.catchError((Object _) {});
     return operation;
   }
 
-  Future<void> _performUpdateBackground({required bool userInitiated}) async {
+  Future<void> _performUpdateBackground() async {
     if (_disposed) return;
     final revision = ++_backgroundRevision;
+    if (_nativeServiceStateUnknown) {
+      final native = await background.status();
+      if (_disposed || revision != _backgroundRevision) return;
+      if (native == null) {
+        backgroundWarning = '暂时无法确认后台服务状态，请稍后重试或手动重新开启';
+        _notify();
+        return;
+      }
+      await _adoptNativeServiceSession(native);
+    }
     String? startupWarning;
     try {
       await _configureAppAutostart(settings);
@@ -885,33 +887,22 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed || revision != _backgroundRevision) return;
     final hasAutomation = settings.autoEnter || settings.autoAnswer;
     if (!hasAutomation) _serviceManuallyEnabled = false;
-    final continuedMode =
-        _ios && settings.backgroundMode == BackgroundServiceMode.continuedTask;
-    final autoRequested =
-        settings.autoStartService && hasAutomation && !continuedMode;
+    final autoRequested = settings.autoStartService && hasAutomation;
     final needed =
         (account != null || _resumeLoginPending) &&
         backgroundSupported &&
         hasAutomation &&
         !_serviceManuallyDisabled &&
         !_deadlineExpired &&
-        (!continuedMode || userInitiated || background.enabled) &&
         (!_ios ||
             settings.iosBackgroundConsentMode ==
                 settings.backgroundMode.name) &&
         (_serviceManuallyEnabled || autoRequested);
     var okay = false;
     _serviceTransition = true;
-    background.userInitiated = userInitiated;
     try {
-      if (needed &&
-          _serviceDeadline == null &&
-          settings.serviceTimeoutMinutes > 0) {
-        _serviceDeadline = now().add(
-          Duration(minutes: settings.serviceTimeoutMinutes),
-        );
-        await _persistServiceSession();
-        _armServiceTimer();
+      if (needed && !background.enabled) {
+        await _resetServiceTimeout();
       }
       await background.configure(
         mode: _runtimeMode,
@@ -923,7 +914,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       // independently and must not turn a successful local save into a failure.
       logs.add(AppLogEvent.background, success: false);
     } finally {
-      background.userInitiated = false;
       _serviceTransition = false;
     }
     if (_disposed || revision != _backgroundRevision) return;
@@ -948,7 +938,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (previousWarning != backgroundWarning || needed && okay) {
       logs.add(AppLogEvent.background, success: okay);
     }
-    _scheduleBackgroundDiagnostics();
     _notify();
   }
 
@@ -2004,7 +1993,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void dispose() {
     _disposed = true;
-    _stopBackgroundDiagnostics();
     _generation++;
     _poller?.cancel();
     _serviceTimer?.cancel();
