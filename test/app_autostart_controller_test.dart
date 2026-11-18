@@ -517,10 +517,12 @@ void main() {
       );
       await controller.retryBackground();
       expect(background.active, true);
+      await controller.saveSettings(AppSettings(autoAnswer: true));
+      await controller.setSystemService(true);
       await controller.setSystemService(false);
-      expect(autostart.suspensions, [true]);
+      expect(autostart.suspensions, [false, true]);
       expect(background.active, false);
-      expect(autostart.registrations.last, (enabled: true, eligible: false));
+      expect(autostart.registrations.last, (enabled: false, eligible: false));
       await controller.retryBackground();
       await controller.saveSettings(
         AppSettings(
@@ -532,7 +534,7 @@ void main() {
       expect(background.active, false);
       expect(autostart.registrations.last.eligible, false);
       await controller.setSystemService(true);
-      expect(autostart.suspensions, [true, false]);
+      expect(autostart.suspensions, [false, true, false]);
       expect(background.active, true);
       expect(autostart.registrations.last.eligible, true);
     },

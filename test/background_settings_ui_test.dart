@@ -264,6 +264,54 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+    testWidgets('${platform.name}自动启动服务禁止手动停服，关闭后恢复操作且异常停服仍可开启', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = platform;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final runtime = _Background()..active = true;
+      final controller = _Controller(runtime);
+      controller.settings.autoStartService = true;
+      await _show(tester, SettingsPage(controller: controller));
+      expect(tester.widget<Switch>(find.byType(Switch)).value, true);
+      expect(tester.widget<Switch>(find.byType(Switch)).onChanged, isNull);
+      expect(find.textContaining('请先关闭自动启动服务后关闭系统服务'), findsOneWidget);
+      expect(runtime.active, true);
+      await controller.saveSettings(
+        AppSettings.fromJson(controller.settings.toJson())
+          ..autoStartService = false,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(find.byType(Switch)).onChanged, isNotNull);
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      expect(runtime.active, false);
+      await controller.saveSettings(
+        AppSettings.fromJson(controller.settings.toJson())
+          ..autoStartService = true,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(find.byType(Switch)).value, false);
+      expect(tester.widget<Switch>(find.byType(Switch)).onChanged, isNotNull);
+      expect(find.textContaining('请先关闭自动启动服务后关闭系统服务'), findsNothing);
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      if (platform == TargetPlatform.iOS) {
+        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(controller.starts, 0);
+        await tester.tap(find.text('确认开启'));
+        await tester.pumpAndSettle();
+      }
+      expect(controller.starts, 1);
+      expect(runtime.active, true);
+      expect(tester.widget<Switch>(find.byType(Switch)).onChanged, isNull);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      await tester.binding.setSurfaceSize(null);
+    });
+  }
+
   testWidgets('iOS每次手动启用均确认，取消不启动', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);

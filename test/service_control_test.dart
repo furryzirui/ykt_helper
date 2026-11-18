@@ -77,7 +77,7 @@ void main() {
   );
 
   test(
-    'auto-start launches only with automation and manual off wins',
+    'auto-start launches with automation and manual control follows disabling auto-start',
     () async {
       final runtime = _Background();
       final controller =
@@ -95,6 +95,8 @@ void main() {
       await controller.retryBackground();
       expect(runtime.active, isTrue);
 
+      await controller.saveSettings(AppSettings(autoAnswer: true));
+      await controller.setSystemService(true);
       await controller.setSystemService(false);
       expect(runtime.active, isFalse);
       await controller.retryBackground();

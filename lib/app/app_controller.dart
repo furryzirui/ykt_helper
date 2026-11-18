@@ -322,13 +322,17 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     _armServiceTimer();
   }
 
-  Future<void> _resetServiceTimeout() async {
+  void _clearServiceTimeoutState() {
     _serviceTimer?.cancel();
     _serviceTimer = null;
     _serviceDeadline = null;
     _nativeDeadlineExpired = false;
     _serviceExpiryHandled = false;
     _windowsExitPending = false;
+  }
+
+  Future<void> _resetServiceTimeout() async {
+    _clearServiceTimeoutState();
     if (settings.serviceTimeoutMinutes != 0) {
       final next = AppSettings.fromJson(settings.toJson())
         ..serviceTimeoutMinutes = 0;
@@ -388,6 +392,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _expireService() async {
+    if (settings.autoStartService) {
+      // A callback queued before the preference changed no longer owns a
+      // valid finite timer. It must not suspend the unlimited service.
+      _clearServiceTimeoutState();
+      return;
+    }
     if (_disposed ||
         _expiringService ||
         _serviceExpiryHandled ||
@@ -435,6 +445,28 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   void _runtimeStateChanged(BackgroundRuntimeState state) {
     if (_disposed) return;
     if (_serviceTransition || _expiringService) return;
+    if (state.reason == 'deadline' && settings.autoStartService) {
+      // The former native deadline may fire while the unlimited preference
+      // is being persisted. Preserve an earlier deliberate manual stop.
+      _clearServiceTimeoutState();
+      if (!_serviceManuallyDisabled) {
+        unawaited(
+          autostart
+              .setSuspended(false)
+              .then((_) async {
+                if (!_disposed &&
+                    settings.autoStartService &&
+                    !_serviceManuallyDisabled) {
+                  await _updateBackground();
+                }
+              })
+              .catchError((Object _) {
+                logs.add(AppLogEvent.background, success: false);
+              }),
+        );
+      }
+      return;
+    }
     if (state.enabled &&
         state.deadline == null &&
         (_serviceDeadline != null || settings.serviceTimeoutMinutes != 0)) {
@@ -786,6 +818,9 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     bool enabled, {
     bool iosConfirmed = false,
   }) async {
+    if (!enabled && settings.autoStartService) {
+      throw const ApiFailure('请先关闭自动启动服务，再关闭系统服务');
+    }
     if (!backgroundSupported) return;
     if (enabled && !(settings.autoEnter || settings.autoAnswer)) {
       throw const ApiFailure('请先开启至少一项自动化');

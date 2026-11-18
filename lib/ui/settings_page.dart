@@ -91,7 +91,10 @@ class _SettingsPageState extends State<SettingsPage> {
                 SettingTile(
                   icon: Icons.power_settings_new_rounded,
                   title: '系统服务',
-                  description: '保持自动化后台运行，关闭后仅前台运行，可减少耗电',
+                  description:
+                      c.backgroundEnabled && c.settings.autoStartService
+                      ? '保持自动化后台运行，关闭后仅前台运行，可减少耗电\n请先关闭自动启动服务后关闭系统服务'
+                      : '保持自动化后台运行，关闭后仅前台运行，可减少耗电',
                   trailing: !c.systemServiceSupported
                       ? Icon(
                           defaultTargetPlatform == TargetPlatform.windows
@@ -104,6 +107,8 @@ class _SettingsPageState extends State<SettingsPage> {
                           onChanged:
                               !c.initialized ||
                                   c.backgroundBusy ||
+                                  c.backgroundEnabled &&
+                                      c.settings.autoStartService ||
                                   !c.systemServiceSupported ||
                                   c.account == null && !c.backgroundEnabled ||
                                   !(c.settings.autoEnter ||

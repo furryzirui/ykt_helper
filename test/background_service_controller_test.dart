@@ -15,10 +15,16 @@ import 'package:ykt_helper/services/background_runtime.dart';
 
 class _MemoryStore implements KeyValueStore {
   final values = <String, String>{};
+  String? blockedKey;
+  Completer<void>? writeBarrier;
   @override
   Future<String?> read(String key) async => values[key];
   @override
-  Future<void> write(String key, String value) async => values[key] = value;
+  Future<void> write(String key, String value) async {
+    if (key == blockedKey) await writeBarrier?.future;
+    values[key] = value;
+  }
+
   @override
   Future<void> delete(String key) async => values.remove(key);
 }
@@ -439,6 +445,120 @@ void main() {
       },
     );
   }
+
+  test(
+    'automatic startup rejects manual service shutdown without changing any state',
+    () {
+      fakeAsync((async) {
+        final h = _Harness(
+          async,
+          settings: AppSettings(autoEnter: true, autoStartService: true),
+        );
+        _settle(async, h.controller.setSystemService(true));
+        final stored = Map<String, String>.of(h.store.values);
+        final requests = List<bool>.of(h.runtime.requests);
+        final suspensions = List<bool>.of(h.startup.suspensions);
+        expect(
+          () => _settle(async, h.controller.setSystemService(false)),
+          throwsA(
+            isA<ApiFailure>().having(
+              (failure) => failure.message,
+              'reason',
+              '请先关闭自动启动服务，再关闭系统服务',
+            ),
+          ),
+        );
+        expect(h.runtime.active, isTrue);
+        expect(h.runtime.requests, requests);
+        expect(h.startup.suspensions, suspensions);
+        expect(h.store.values, stored);
+        expect(h.controller.settings.autoStartService, isTrue);
+        expect(h.controller.serviceDeadline, isNull);
+        _settle(async, h.controller.retryBackground());
+        expect(h.runtime.active, isTrue);
+        _settle(
+          async,
+          h.controller.saveSettings(
+            AppSettings.fromJson(h.controller.settings.toJson())
+              ..autoStartService = false,
+          ),
+        );
+        _settle(async, h.controller.setSystemService(false));
+        expect(h.runtime.active, isFalse);
+        h.dispose(async);
+      });
+    },
+  );
+
+  test(
+    'a stale native deadline during automatic-start persistence cannot stop the new unlimited session',
+    () {
+      fakeAsync((async) {
+        final h = _Harness(async);
+        _settle(async, h.controller.setSystemService(true));
+        _settle(async, h.controller.setServiceTimeout(10));
+        final oldDeadline = h.controller.serviceDeadline;
+        final stopRequests = h.runtime.requests.where((value) => !value).length;
+        h.store.blockedKey = 'serviceSession';
+        final barrier = Completer<void>();
+        h.store.writeBarrier = barrier;
+        var completed = false;
+        Object? failure;
+        h.controller
+            .saveSettings(
+              AppSettings.fromJson(h.controller.settings.toJson())
+                ..autoStartService = true,
+            )
+            .then(
+              (_) => completed = true,
+              onError: (Object error) {
+                failure = error;
+                completed = true;
+              },
+            );
+        async.flushMicrotasks();
+        expect(completed, isFalse);
+        expect(h.controller.settings.autoStartService, isTrue);
+        expect(h.controller.serviceDeadline, isNull);
+        expect(h.runtime.configurations.last.deadline, oldDeadline);
+        h.runtime.active = false;
+        h.runtime.listener!(
+          BackgroundRuntimeState(
+            enabled: false,
+            deadline: oldDeadline,
+            reason: 'deadline',
+          ),
+        );
+        async.flushMicrotasks();
+        expect(
+          h.runtime.requests.where((value) => !value).length,
+          stopRequests,
+        );
+        expect(h.startup.suspensions.last, isFalse);
+        expect(h.controller.serviceDeadline, isNull);
+        barrier.complete();
+        h.store.writeBarrier = null;
+        h.store.blockedKey = null;
+        async.flushMicrotasks();
+        expect(completed, isTrue);
+        expect(failure, isNull);
+        expect(h.runtime.active, isTrue);
+        expect(h.runtime.configurations.last.deadline, isNull);
+        expect(h.controller.serviceDeadline, isNull);
+        expect(h.controller.settings.serviceTimeoutMinutes, 0);
+        expect(h.controller.backgroundWarning, isNull);
+        expect(
+          h.runtime.requests.where((value) => !value).length,
+          stopRequests,
+        );
+        async.elapse(const Duration(minutes: 11));
+        async.flushMicrotasks();
+        expect(h.runtime.active, isTrue);
+        expect(h.runtime.exits, 0);
+        h.dispose(async);
+      });
+    },
+  );
 
   test(
     'automatic starts discard the saved timeout and running refreshes preserve a selected timer',
