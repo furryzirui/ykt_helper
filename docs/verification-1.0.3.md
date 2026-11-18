@@ -11,4 +11,15 @@
 
 ## 安装包检查
 
-构建与安装包核对结果将在完成后记录。
+安装包源代码提交：`df1cc507e39296007fc44536c009f1ebee418295`。[Windows / iOS CI](https://github.com/furryzirui/ykt_helper/actions/runs/44329122573) 与 [Android CI](https://github.com/furryzirui/ykt_helper/actions/runs/44329116338) 均通过。
+
+- Android 两个 APK 已核对 1.0.3+15、包名、架构、原发布证书、v2 签名及 ZIP CRC。
+- Windows 已核对安装器格式、版本和 CI 打包证据；未执行安装器或本地解包核算内部文件。
+- iOS 核对 1.0.3+15、arm64、iOS 15 最低版本、主程序未签名、ZIP CRC、Ed25519 清单签名与全部 50 个文件摘要；后台声明仅 audio/location，不包含长任务白名单。
+
+| 安装包 | SHA-256 |
+| --- | --- |
+| Android arm64-v8a | `befc07096c62b7f03fb857da3cdf155c138c172aa62de6da310e94464f6e410e` |
+| Android universal | `489476ef900e0c015097de6a38c700d5c929195b325c1a8645eb0c8e8b1b88d3` |
+| Windows EXE | `acd43db7c7be7bff5a6123c211a3f4f044aad0cfc4416393fd4873843f5ef14c` |
+| iOS unsigned IPA | `a414c9bcaf193812e7521c8496432ba0b4f4f1c160fe6dff150ee3f58a395f2f` |
