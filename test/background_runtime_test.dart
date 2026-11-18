@@ -294,7 +294,7 @@ void main() {
   );
 
   testWidgets(
-    'diagnostic calls time out without overlapping the still pending native call',
+    'new diagnostic samples neither overlap nor reuse a timed-out native snapshot',
     (tester) async {
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
       final native = Completer<Map<String, Object?>>();
@@ -321,7 +321,11 @@ void main() {
         'appState': 'background',
       });
       await tester.pump();
-      expect((await later)!.enabled, true);
+      expect(await later, isNull);
+      final fresh = runtime.diagnostics();
+      await tester.pump();
+      expect(requests, 2);
+      expect((await fresh)!.enabled, true);
       expect(runtime.enabled, false);
     },
   );

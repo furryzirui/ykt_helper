@@ -125,9 +125,10 @@ class BackgroundRuntime {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
       return Future.value(null);
     }
-    // A timed-out platform call cannot be cancelled. Reuse it until it settles
-    // so an unavailable native bridge never accumulates overlapping requests.
-    final flight = _diagnosticsFlight ??= _readDiagnostics().whenComplete(() {
+    // A timed-out platform call cannot be cancelled. Wait until it settles
+    // without passing its old observation to a later sample or service session.
+    if (_diagnosticsFlight != null) return Future.value(null);
+    final flight = _diagnosticsFlight = _readDiagnostics().whenComplete(() {
       _diagnosticsFlight = null;
     });
     return flight.timeout(const Duration(seconds: 3), onTimeout: () => null);
