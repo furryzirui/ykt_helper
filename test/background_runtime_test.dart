@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -231,6 +233,181 @@ void main() {
     expect(await runtime.status(), isNull);
     expect(runtime.enabled, isFalse);
   });
+
+  test(
+    'diagnostics reads only allowlisted state and does not adopt service state',
+    () async {
+      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (
+        call,
+      ) async {
+        calls.add(call);
+        return {
+          'enabled': true,
+          'mode': 'silentAudio',
+          'appState': 'background',
+          'audioPlaying': true,
+          'audioTimeMs': 750,
+          'pipActive': false,
+          'pipFrameCount': 12,
+          'cookie': 'secret',
+          'location': 'private',
+        };
+      });
+      final snapshot = await runtime.diagnostics();
+      expect(snapshot!.toJson(), {
+        'enabled': true,
+        'mode': 'silentAudio',
+        'appState': 'background',
+        'audioPlaying': true,
+        'audioTimeMs': 750,
+        'pipActive': false,
+        'pipFrameCount': 12,
+      });
+      expect(calls.single.method, 'diagnostics');
+      expect(runtime.enabled, false);
+      expect(runtime.failureReason, isNull);
+    },
+  );
+
+  test(
+    'invalid diagnostic snapshots or native errors remain unavailable without leaking text',
+    () async {
+      for (final response in [
+        null,
+        true,
+        {'enabled': 'true', 'mode': 'silentAudio', 'appState': 'background'},
+        {'enabled': true, 'mode': 'secret-cookie', 'appState': 'background'},
+        {'enabled': true, 'mode': 'silentAudio', 'appState': 'secret-key'},
+      ]) {
+        messenger.setMockMethodCallHandler(
+          BackgroundRuntime.channel,
+          (_) async => response,
+        );
+        expect(await runtime.diagnostics(), isNull);
+      }
+      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (_) async {
+        throw PlatformException(code: 'private', message: 'private-token');
+      });
+      expect(await runtime.diagnostics(), isNull);
+      expect(runtime.failureMessage, isNull);
+    },
+  );
+
+  testWidgets(
+    'diagnostic calls time out without overlapping the still pending native call',
+    (tester) async {
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final native = Completer<Map<String, Object?>>();
+      var requests = 0;
+      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (
+        call,
+      ) async {
+        requests++;
+        return native.future;
+      });
+      final first = runtime.diagnostics();
+      final second = runtime.diagnostics();
+      await tester.pump();
+      expect(requests, 1);
+      await tester.pump(const Duration(seconds: 3));
+      expect(await first, isNull);
+      expect(await second, isNull);
+      final later = runtime.diagnostics();
+      await tester.pump();
+      expect(requests, 1);
+      native.complete({
+        'enabled': true,
+        'mode': 'silentAudio',
+        'appState': 'background',
+      });
+      await tester.pump();
+      expect((await later)!.enabled, true);
+      expect(runtime.enabled, false);
+    },
+  );
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+    test(
+      '${platform.name} does not request iOS diagnostic snapshots',
+      () async {
+        debugDefaultTargetPlatformOverride = platform;
+        expect(await runtime.diagnostics(), isNull);
+        expect(calls, isEmpty);
+      },
+    );
+  }
+
+  test(
+    'native start exception reads failure before cleanup and preserves its message',
+    () async {
+      var stopped = false;
+      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (
+        call,
+      ) async {
+        calls.add(call);
+        if (call.method == 'setEnabled') {
+          if ((call.arguments as Map)['enabled'] == true) {
+            throw PlatformException(
+              code: 'unavailable',
+              message: 'fallback message',
+            );
+          }
+          stopped = true;
+          return true;
+        }
+        if (call.method == 'status') {
+          return {
+            'enabled': false,
+            'reason': stopped ? 'stopped' : 'pipUnavailable',
+            if (!stopped) 'message': '设备不支持画中画',
+          };
+        }
+        return true;
+      });
+      await runtime.configure(mode: BackgroundServiceMode.pictureInPicture);
+      expect(await runtime.setEnabled(true), false);
+      expect(calls.map((call) => call.method), [
+        'configure',
+        'setEnabled',
+        'status',
+        'setEnabled',
+      ]);
+      expect(stopped, true);
+      expect(runtime.failureReason, 'pipUnavailable');
+      expect(runtime.failureMessage, '设备不支持画中画');
+      expect(runtime.enabled, false);
+    },
+  );
+
+  test(
+    'native false start reads detailed failure and remains disabled',
+    () async {
+      messenger.setMockMethodCallHandler(BackgroundRuntime.channel, (
+        call,
+      ) async {
+        calls.add(call);
+        if (call.method == 'setEnabled') return false;
+        if (call.method == 'status') {
+          return {
+            'enabled': false,
+            'reason': 'audioFailed',
+            'message': '音频会话不可用',
+          };
+        }
+        return true;
+      });
+      await runtime.configure(mode: BackgroundServiceMode.silentAudio);
+      expect(await runtime.setEnabled(true), false);
+      expect(runtime.failureReason, 'audioFailed');
+      expect(runtime.failureMessage, '音频会话不可用');
+      expect(runtime.enabled, false);
+      expect(calls.map((call) => call.method), [
+        'configure',
+        'setEnabled',
+        'status',
+      ]);
+    },
+  );
 
   for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
     test(

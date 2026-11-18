@@ -13,6 +13,7 @@ import '../services/ai_answer.dart';
 import '../services/app_logs.dart';
 import '../services/app_autostart.dart';
 import '../services/background_runtime.dart';
+import '../services/background_diagnostics.dart';
 import '../services/gallery_saver.dart';
 import '../services/file_export.dart';
 import '../services/slide_export.dart';
@@ -86,6 +87,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   final GallerySaver gallery;
   final AppLogs logs;
   final bool startTimers, connectSockets;
+  final bool iosBackgroundDiagnostics;
   final DateTime Function() now;
   final Dio _media = Dio(
     BaseOptions(
@@ -125,6 +127,9 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   bool _foreground = true, _serviceTransition = false, _expiringService = false;
   int _lifecycleRevision = 0;
   Timer? _serviceTimer;
+  Timer? _backgroundDiagnosticTimer;
+  int _backgroundDiagnosticEpoch = 0;
+  bool _backgroundDiagnosticInFlight = false;
   bool get _windows =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
   bool get _ios => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
@@ -160,6 +165,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     AppLogs? logs,
     this.startTimers = true,
     this.connectSockets = true,
+    this.iosBackgroundDiagnostics = iosBackgroundDiagnosticsEnabled,
     DateTime Function()? now,
   }) : now = now ?? DateTime.now,
        store = store ?? SecureStore(),
@@ -167,7 +173,8 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
        background = background ?? BackgroundRuntime(),
        autostart = autostart ?? const AppAutostart(),
        gallery = gallery ?? const GallerySaver(),
-       logs = logs ?? AppLogs() {
+       logs =
+           logs ?? AppLogs(iosBackgroundDiagnostics: iosBackgroundDiagnostics) {
     this.api =
         api ??
         RainApi(
@@ -180,6 +187,63 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
   void _notify() {
     if (!_disposed) notifyListeners();
+  }
+
+  bool get _backgroundDiagnosticsNeeded =>
+      iosBackgroundDiagnostics &&
+      _ios &&
+      !_disposed &&
+      account != null &&
+      background.enabled &&
+      !_serviceManuallyDisabled &&
+      !_deadlineExpired &&
+      (settings.autoEnter || settings.autoAnswer);
+
+  void _stopBackgroundDiagnostics() {
+    _backgroundDiagnosticTimer?.cancel();
+    _backgroundDiagnosticTimer = null;
+    _backgroundDiagnosticEpoch++;
+  }
+
+  void _scheduleBackgroundDiagnostics() {
+    if (!_backgroundDiagnosticsNeeded) {
+      _stopBackgroundDiagnostics();
+      return;
+    }
+    if (_backgroundDiagnosticTimer != null || _backgroundDiagnosticInFlight) {
+      return;
+    }
+    final epoch = _backgroundDiagnosticEpoch;
+    // One-shot scheduling never invents missed observations after suspension.
+    _backgroundDiagnosticTimer = Timer(const Duration(seconds: 10), () {
+      _backgroundDiagnosticTimer = null;
+      unawaited(_sampleBackgroundDiagnostics(epoch));
+    });
+  }
+
+  Future<void> _sampleBackgroundDiagnostics(int epoch) async {
+    if (epoch != _backgroundDiagnosticEpoch || !_backgroundDiagnosticsNeeded) {
+      return;
+    }
+    _backgroundDiagnosticInFlight = true;
+    final mode = _runtimeMode;
+    logs.addBackgroundHeartbeat(mode: mode, foreground: _foreground);
+    IosBackgroundSnapshot? snapshot;
+    try {
+      snapshot = await background.diagnostics().timeout(
+        const Duration(seconds: 3),
+      );
+    } catch (_) {
+      // Test diagnostics must never change automation or expose native errors.
+    } finally {
+      _backgroundDiagnosticInFlight = false;
+    }
+    if (epoch == _backgroundDiagnosticEpoch &&
+        mode == _runtimeMode &&
+        _backgroundDiagnosticsNeeded) {
+      logs.addBackgroundSnapshot(mode: mode, snapshot: snapshot);
+    }
+    _scheduleBackgroundDiagnostics();
   }
 
   bool _valid(LiveClass live) =>
@@ -349,6 +413,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     _expiringService = true;
+    _stopBackgroundDiagnostics();
     _serviceTimer?.cancel();
     _serviceExpiryHandled = true;
     if (_windows && _foreground) {
@@ -387,7 +452,13 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _runtimeStateChanged(BackgroundRuntimeState state) {
-    if (_disposed || _serviceTransition || _expiringService) return;
+    if (_disposed) return;
+    if (!state.enabled) {
+      _stopBackgroundDiagnostics();
+    } else if (!_serviceTransition && !_expiringService) {
+      _scheduleBackgroundDiagnostics();
+    }
+    if (_serviceTransition || _expiringService) return;
     if (state.reason == 'deadline' || _deadlineExpired) {
       _nativeDeadlineExpired = true;
       _serviceDeadline = state.deadline ?? _serviceDeadline ?? now();
@@ -543,6 +614,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> logout() async {
+    _stopBackgroundDiagnostics();
     logs.add(AppLogEvent.logout);
     _generation++;
     _backgroundRevision++;
@@ -694,6 +766,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     await _write('settings', jsonEncode(candidate.toJson()));
     if (_disposed) return;
     settings = candidate;
+    _stopBackgroundDiagnostics();
     if (!candidate.autoEnter && !candidate.autoAnswer && !_windows) {
       _serviceTimer?.cancel();
       _serviceDeadline = null;
@@ -724,6 +797,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     bool iosConfirmed = false,
   }) async {
     if (!backgroundSupported) return;
+    if (!enabled) _stopBackgroundDiagnostics();
     if (enabled && !(settings.autoEnter || settings.autoAnswer)) {
       throw const ApiFailure('请先开启至少一项自动化');
     }
@@ -874,6 +948,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (previousWarning != backgroundWarning || needed && okay) {
       logs.add(AppLogEvent.background, success: okay);
     }
+    _scheduleBackgroundDiagnostics();
     _notify();
   }
 
@@ -1929,6 +2004,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void dispose() {
     _disposed = true;
+    _stopBackgroundDiagnostics();
     _generation++;
     _poller?.cancel();
     _serviceTimer?.cancel();

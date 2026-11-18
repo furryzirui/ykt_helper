@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../domain/models.dart';
 import 'app_permissions.dart';
+import 'background_diagnostics.dart';
 
 class BackgroundRuntimeState {
   final bool enabled;
@@ -42,6 +43,7 @@ class BackgroundRuntime {
   Future<bool> _operation = Future<bool>.value(true);
   BackgroundServiceMode _mode = BackgroundServiceMode.native;
   DateTime? _deadline;
+  Future<IosBackgroundSnapshot?>? _diagnosticsFlight;
   String? failureReason;
   String? failureMessage;
   bool userInitiated = false;
@@ -117,6 +119,29 @@ class BackgroundRuntime {
     }
   }
 
+  /// Read-only test observation. Do not adopt it as a service state change or
+  /// log platform exceptions: a successful snapshot is not a keepalive result.
+  Future<IosBackgroundSnapshot?> diagnostics() {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+      return Future.value(null);
+    }
+    // A timed-out platform call cannot be cancelled. Reuse it until it settles
+    // so an unavailable native bridge never accumulates overlapping requests.
+    final flight = _diagnosticsFlight ??= _readDiagnostics().whenComplete(() {
+      _diagnosticsFlight = null;
+    });
+    return flight.timeout(const Duration(seconds: 3), onTimeout: () => null);
+  }
+
+  Future<IosBackgroundSnapshot?> _readDiagnostics() async {
+    try {
+      final raw = await channel.invokeMethod<Object?>('diagnostics');
+      return IosBackgroundSnapshot.parse(raw);
+    } on Exception {
+      return null;
+    }
+  }
+
   Future<void> exitApplication() async {
     if (!_desktop && defaultTargetPlatform != TargetPlatform.android) return;
     try {
@@ -164,6 +189,7 @@ class BackgroundRuntime {
       return true;
     }
     if (!_supported) return !enabled;
+    var nativeStartAttempted = false;
     try {
       if (!enabled) {
         final stopped = await _native(false);
@@ -207,17 +233,63 @@ class BackgroundRuntime {
         }
       }
       failureReason = null;
+      failureMessage = null;
+      nativeStartAttempted = true;
       _enabled = await _native(true);
+      if (!_enabled) {
+        await _readStartFailure();
+        _enabled = false;
+      }
       return _enabled;
-    } on Exception {
+    } on Exception catch (error) {
+      // Native callbacks may arrive while the controller is transitioning.
+      // Read the reason before cleanup changes native status to "stopped".
+      final observed = enabled && nativeStartAttempted
+          ? await _readStartFailure()
+          : null;
+      final reason =
+          observed?.reason ??
+          (failureReason != 'stopped' ? failureReason : null) ??
+          (error is PlatformException ? error.code : 'startFailed');
+      final message =
+          observed?.message ??
+          failureMessage ??
+          (error is PlatformException ? error.message : null);
       try {
         await _native(false);
       } on Exception {
         // Cleanup must not hide a failed start.
       }
       _enabled = false;
-      failureReason ??= 'startFailed';
+      failureReason = reason;
+      failureMessage = message;
       return false;
     }
+  }
+
+  Future<BackgroundRuntimeState?> _readStartFailure() async {
+    final previousReason = failureReason;
+    final previousMessage = failureMessage;
+    BackgroundRuntimeState? observed;
+    try {
+      // Keep this read separate from status(): a timed-out status future must
+      // not later overwrite disabled state after the cleanup request returns.
+      final raw = await channel
+          .invokeMapMethod<String, dynamic>('status')
+          .timeout(const Duration(seconds: 3));
+      if (raw != null && raw['enabled'] is bool) {
+        observed = BackgroundRuntimeState.fromMap(raw);
+      }
+    } catch (_) {
+      // A missing diagnostic status must not hide the original start failure.
+    }
+    if (observed?.reason == null || observed?.reason == 'stopped') {
+      failureReason = previousReason;
+      failureMessage = previousMessage;
+      return null;
+    }
+    failureReason = observed!.reason;
+    failureMessage = observed.message;
+    return observed;
   }
 }

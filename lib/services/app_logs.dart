@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../domain/models.dart';
+import 'background_diagnostics.dart';
+
 enum AppLogEvent {
   startup('启动'),
   login('登录'),
@@ -12,6 +15,8 @@ enum AppLogEvent {
   refresh('刷新课程与动态'),
   settings('保存自动化设置'),
   background('后台服务检查'),
+  backgroundHeartbeat('Dart 执行心跳（测试）'),
+  backgroundSnapshot('iOS 原生状态快照（测试）'),
   lessons('读取课堂列表'),
   detail('读取课堂详情'),
   attendance('读取签到状态'),
@@ -38,19 +43,75 @@ class AppLogEntry {
   final AppLogEvent event;
   final bool? success;
   final int? code, count;
+  final BackgroundServiceMode? backgroundMode;
+  final bool? foreground;
+  final IosBackgroundSnapshot? backgroundSnapshot;
   const AppLogEntry({
     required this.time,
     required this.event,
     this.success,
     this.code,
     this.count,
+    this.backgroundMode,
+    this.foreground,
+    this.backgroundSnapshot,
   });
+
+  bool get _diagnostic =>
+      event == AppLogEvent.backgroundHeartbeat ||
+      event == AppLogEvent.backgroundSnapshot;
+
+  static String _modeLabel(BackgroundServiceMode mode) => switch (mode) {
+    BackgroundServiceMode.native => '系统默认',
+    BackgroundServiceMode.silentAudio => '静音音频',
+    BackgroundServiceMode.pictureInPicture => '画中画',
+    BackgroundServiceMode.location => '持续定位',
+    BackgroundServiceMode.continuedTask => 'iOS 26 长任务',
+  };
+
+  static String _appStateLabel(BackgroundDiagnosticAppState state) =>
+      switch (state) {
+        BackgroundDiagnosticAppState.active => '前台',
+        BackgroundDiagnosticAppState.inactive => '非活跃',
+        BackgroundDiagnosticAppState.background => '后台',
+      };
 
   String get message => [
     event.label,
-    if (success != null) success! ? '成功' : '失败',
+    if (success != null)
+      _diagnostic
+          ? success!
+                ? '已读取'
+                : '不可用'
+          : success!
+          ? '成功'
+          : '失败',
     if (code != null) '状态码 $code',
     if (count != null) '数量 $count',
+    if (event == AppLogEvent.backgroundHeartbeat && backgroundMode != null)
+      _modeLabel(backgroundMode!),
+    if (event == AppLogEvent.backgroundHeartbeat && foreground != null)
+      foreground! ? 'Dart 前台执行' : 'Dart 后台执行',
+    if (event == AppLogEvent.backgroundSnapshot &&
+        backgroundSnapshot != null) ...[
+      '原生方案 ${_modeLabel(backgroundSnapshot!.mode)}',
+      if (backgroundMode != null && backgroundMode != backgroundSnapshot!.mode)
+        '配置方案 ${_modeLabel(backgroundMode!)}',
+      backgroundSnapshot!.enabled ? '原生服务已启用' : '原生服务未启用',
+      '原生${_appStateLabel(backgroundSnapshot!.appState)}',
+      if (backgroundSnapshot!.audioPlaying != null)
+        backgroundSnapshot!.audioPlaying! ? '音频播放中' : '音频未播放',
+      if (backgroundSnapshot!.audioTimeMs != null)
+        '音频位置 ${backgroundSnapshot!.audioTimeMs} ms',
+      if (backgroundSnapshot!.pipActive != null)
+        backgroundSnapshot!.pipActive! ? '画中画已激活' : '画中画未激活',
+      if (backgroundSnapshot!.pipFrameCount != null)
+        '画中画累计送帧 ${backgroundSnapshot!.pipFrameCount}',
+    ],
+    if (event == AppLogEvent.backgroundSnapshot &&
+        backgroundSnapshot == null &&
+        backgroundMode != null)
+      '配置方案 ${_modeLabel(backgroundMode!)}',
   ].join(' · ');
 
   Map<String, Object?> toJson() => {
@@ -59,6 +120,12 @@ class AppLogEntry {
     if (success != null) 'success': success,
     if (code != null) 'code': code,
     if (count != null) 'count': count,
+    if (_diagnostic && backgroundMode != null)
+      'backgroundMode': backgroundMode!.name,
+    if (event == AppLogEvent.backgroundHeartbeat && foreground != null)
+      'foreground': foreground,
+    if (event == AppLogEvent.backgroundSnapshot && backgroundSnapshot != null)
+      'backgroundSnapshot': backgroundSnapshot!.toJson(),
   };
 
   static AppLogEntry? parse(Object? raw) {
@@ -74,11 +141,25 @@ class AppLogEntry {
       success: raw['success'] is bool ? raw['success'] : null,
       code: raw['code'] is int ? raw['code'] : null,
       count: raw['count'] is int ? raw['count'] : null,
+      backgroundMode:
+          event == AppLogEvent.backgroundHeartbeat ||
+              event == AppLogEvent.backgroundSnapshot
+          ? BackgroundServiceMode.values
+                .where((mode) => mode.name == raw['backgroundMode'])
+                .firstOrNull
+          : null,
+      foreground:
+          event == AppLogEvent.backgroundHeartbeat && raw['foreground'] is bool
+          ? raw['foreground'] as bool
+          : null,
+      backgroundSnapshot: event == AppLogEvent.backgroundSnapshot
+          ? IosBackgroundSnapshot.parse(raw['backgroundSnapshot'])
+          : null,
     );
   }
 }
 
-/// A bounded local event log. Only enum labels and numeric results are accepted:
+/// A bounded local event log. Only enum labels, booleans and numeric results are accepted:
 /// headers, URLs, cookies, keys, account data, questions and answers cannot enter
 /// the log through this API. Imported entries are rebuilt from the same schema.
 class AppLogs extends ChangeNotifier {
@@ -90,7 +171,11 @@ class AppLogs extends ChangeNotifier {
   Future<void>? _initializing;
   bool _disposed = false;
   bool storageUnavailable = false;
-  AppLogs({this.fileProvider});
+  final bool iosBackgroundDiagnostics;
+  AppLogs({
+    this.fileProvider,
+    this.iosBackgroundDiagnostics = iosBackgroundDiagnosticsEnabled,
+  });
 
   List<AppLogEntry> get entries => List.unmodifiable(_entries.reversed);
 
@@ -105,7 +190,10 @@ class AppLogs extends ChangeNotifier {
           for (final line in await file.readAsLines()) {
             try {
               final entry = AppLogEntry.parse(jsonDecode(line));
-              if (entry != null) saved.add(entry);
+              if (entry != null &&
+                  (iosBackgroundDiagnostics || !entry._diagnostic)) {
+                saved.add(entry);
+              }
             } catch (_) {
               // One incomplete line must not discard the other events.
             }
@@ -129,7 +217,12 @@ class AppLogs extends ChangeNotifier {
   }
 
   void add(AppLogEvent event, {bool? success, int? code, int? count}) {
-    if (_disposed) return;
+    if (_disposed ||
+        !iosBackgroundDiagnostics &&
+            (event == AppLogEvent.backgroundHeartbeat ||
+                event == AppLogEvent.backgroundSnapshot)) {
+      return;
+    }
     _entries.add(
       AppLogEntry(
         time: DateTime.now(),
@@ -137,6 +230,43 @@ class AppLogs extends ChangeNotifier {
         success: success,
         code: code,
         count: count,
+      ),
+    );
+    _trim();
+    _persist();
+    notifyListeners();
+  }
+
+  void addBackgroundHeartbeat({
+    required BackgroundServiceMode mode,
+    required bool foreground,
+  }) {
+    if (_disposed || !iosBackgroundDiagnostics) return;
+    _entries.add(
+      AppLogEntry(
+        time: DateTime.now(),
+        event: AppLogEvent.backgroundHeartbeat,
+        backgroundMode: mode,
+        foreground: foreground,
+      ),
+    );
+    _trim();
+    _persist();
+    notifyListeners();
+  }
+
+  void addBackgroundSnapshot({
+    required BackgroundServiceMode mode,
+    required IosBackgroundSnapshot? snapshot,
+  }) {
+    if (_disposed || !iosBackgroundDiagnostics) return;
+    _entries.add(
+      AppLogEntry(
+        time: DateTime.now(),
+        event: AppLogEvent.backgroundSnapshot,
+        success: snapshot != null,
+        backgroundMode: mode,
+        backgroundSnapshot: snapshot,
       ),
     );
     _trim();
@@ -182,6 +312,8 @@ class AppLogs extends ChangeNotifier {
     'ykt_helper 应用日志',
     '导出时间：${DateTime.now().toLocal().toIso8601String()}',
     '仅记录操作类型和结果，不包含账号、凭证、题目或答案。',
+    if (_entries.any((entry) => entry._diagnostic))
+      '测试心跳仅表示记录时 Dart 正在执行；原生状态为当时快照，不能证明持续后台运行。日志仅保留最近 500 条，10 秒一次心跳与快照约覆盖 40 分钟。',
     '',
     for (final entry in _entries)
       '${entry.time.toLocal().toIso8601String()}  ${entry.message}',

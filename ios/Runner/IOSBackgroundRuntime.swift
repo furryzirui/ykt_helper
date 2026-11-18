@@ -32,6 +32,7 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
   private var pipLayer: AVSampleBufferDisplayLayer?
   private var pipView: UIView?
   private var pipFrameTimer: Timer?
+  private var pipFrameCount = 0
   private var pipPossibleObserver: NSKeyValueObservation?
   private var pipStartupTimeout: DispatchWorkItem?
   private var pendingStart: FlutterResult?
@@ -66,6 +67,8 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       case "status":
         self.expireIfNeeded()
         result(self.status())
+      case "diagnostics":
+        result(self.diagnostics())
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -195,6 +198,29 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
 
   private func notify() { channel.invokeMethod("stateChanged", arguments: status()) }
 
+  /// Read-only snapshots for opt-in test builds. No timer, media control, task
+  /// submission or location reads are introduced by inspecting these values.
+  private func diagnostics() -> [String: Any] {
+    let state: String
+    switch UIApplication.shared.applicationState {
+    case .active: state = "active"
+    case .inactive: state = "inactive"
+    case .background: state = "background"
+    @unknown default: state = "unknown"
+    }
+    var value: [String: Any] = [
+      "enabled": enabled, "mode": mode.rawValue, "appState": state,
+    ]
+    if mode == .silentAudio {
+      value["audioPlaying"] = player?.isPlaying == true
+      value["audioTimeMs"] = Int64(max(0, player?.currentTime ?? 0) * 1000)
+    } else if mode == .pictureInPicture {
+      value["pipActive"] = pip?.isPictureInPictureActive == true
+      value["pipFrameCount"] = pipFrameCount
+    }
+    return value
+  }
+
   @discardableResult
   private func expireIfNeeded() -> Bool {
     guard let deadline = deadlineEpochMs else { return false }
@@ -302,9 +328,16 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       notify()
       result(true)
     } catch {
-      let message = (error as? RuntimeFailure)?.message ?? "后台运行启动失败，请重试"
+      let failure: IOSContinuedTaskFailure
+      if let runtimeError = error as? RuntimeFailure {
+        failure = IOSContinuedTaskFailure(reason: "startFailed", message: runtimeError.message)
+      } else if mode == .continuedTask {
+        failure = IOSContinuedTaskPolicy.failure(for: error)
+      } else {
+        failure = IOSContinuedTaskFailure(reason: "startFailed", message: "后台运行启动失败，请重试")
+      }
       let wasPending = pendingStart != nil
-      stop(reason: message, code: "startFailed")
+      stop(reason: failure.message, code: failure.reason)
       if !wasPending { result(false) }
     }
   }
@@ -456,6 +489,7 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       throw RuntimeFailure("请返回应用前台后开启画中画")
     }
     try activateAudio()
+    pipFrameCount = 0
     let preview = UIView(frame: CGRect(
       x: max(window.safeAreaInsets.left + 8, window.bounds.width - window.safeAreaInsets.right - 168),
       y: window.safeAreaInsets.top + 64, width: 160, height: 90
@@ -567,6 +601,7 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
       sampleTiming: &timing, sampleBufferOut: &sample
     ) == noErr, let frame = sample else { throw RuntimeFailure("画中画视频帧创建失败") }
     layer.enqueue(frame)
+    pipFrameCount += 1
   }
 
   func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
@@ -644,7 +679,6 @@ final class IOSBackgroundRuntime: NSObject, AVAudioPlayerDelegate,
 /// session time, never an invented amount of AI/CPU work or submitted answers.
 @available(iOS 26.0, *)
 private final class IOSContinuedClassroomTask {
-  private let identifierPrefix = (Bundle.main.bundleIdentifier ?? "com.furryzirui.ykt-helper") + ".classroomMonitoring."
   private var sessionIdentifier: String?
   private var submitted = false
   private var task: BGContinuedProcessingTask?
@@ -659,8 +693,15 @@ private final class IOSContinuedClassroomTask {
   func start(deadline: Int64, onStarted: @escaping () -> Void,
              onExpired: @escaping () -> Void) throws {
     guard !submitted, task == nil else {
-      throw NSError(domain: "ykt_helper.continued", code: 1)
+      throw IOSContinuedTaskPolicy.busy
     }
+    // Signing tools may rewrite CFBundleIdentifier without updating this
+    // compiled plist array. Reject that mismatch before asking the scheduler;
+    // reusing the old prefix would violate Apple's submitting-Bundle-ID rule.
+    let identifierPrefix = try IOSContinuedTaskPolicy.identifierPrefix(
+      bundleIdentifier: Bundle.main.bundleIdentifier,
+      permittedIdentifiers: Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String]
+    )
     let identifier = identifierPrefix + UUID().uuidString
     // iOS 26 explicitly permits dynamically registering continued-processing
     // handlers. The exact request ID lives under the Info.plist wildcard prefix.
@@ -697,7 +738,7 @@ private final class IOSContinuedClassroomTask {
       self.onStarted = nil
       callback?()
     }
-    guard registered else { throw NSError(domain: "ykt_helper.continued", code: 2) }
+    guard registered else { throw IOSContinuedTaskPolicy.registrationRejected }
     self.onStarted = onStarted
     self.onExpired = onExpired
     sessionIdentifier = identifier
@@ -718,7 +759,7 @@ private final class IOSContinuedClassroomTask {
       sessionIdentifier = nil
       self.onStarted = nil
       self.onExpired = nil
-      throw error
+      throw IOSContinuedTaskPolicy.failure(for: error)
     }
   }
 

@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      ios-background-diagnostics:
+        description: Include temporary 10-second iOS background test logs
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -45,8 +50,12 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - name: Test iOS continued-task configuration
+        run: bash scripts/ios/test_continued_policy.sh
       - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign
+        env:
+          YKT_IOS_BACKGROUND_DIAGNOSTICS: ${{ inputs['ios-background-diagnostics'] && 'true' || 'false' }}
+        run: flutter build ios --release --no-codesign --dart-define=YKT_IOS_BACKGROUND_DIAGNOSTICS=$YKT_IOS_BACKGROUND_DIAGNOSTICS
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

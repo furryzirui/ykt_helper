@@ -1,7 +1,7 @@
 name: ykt_helper
 description: 普通版雨课堂非官方辅助工具
 publish_to: none
-version: 1.0.3+13
+version: 1.0.3+14
 environment:
   sdk: '>=3.8.0 <4.0.0'
 dependencies:
