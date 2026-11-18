@@ -12,6 +12,7 @@ class _Permissions extends AppPermissions {
     AppPermission.photos: PermissionStatus.notRequired,
     AppPermission.battery: PermissionStatus.denied,
     AppPermission.autostart: PermissionStatus.needsConfirmation,
+    AppPermission.location: PermissionStatus.notRequired,
   };
   final opened = <AppPermission>[];
   final requested = <AppPermission>[];
@@ -178,7 +179,7 @@ void main() {
     expect(permissions.checks, 1);
     expect(find.text('未允许'), findsOneWidget);
     expect(find.text('已允许'), findsOneWidget);
-    expect(find.text('无需授权'), findsOneWidget);
+    expect(find.text('无需授权'), findsNWidgets(2));
     expect(find.text('仍受优化'), findsOneWidget);
     expect(tester.widget<ListTile>(_row('保存到相册')).onTap, isNull);
     await tester.tap(_row('保存到相册'));
@@ -193,7 +194,7 @@ void main() {
       permissions.states[permission] = PermissionStatus.notRequired;
     }
     await _show(tester, permissions);
-    expect(find.text('无需授权'), findsNWidgets(5));
+    expect(find.text('无需授权'), findsNWidgets(6));
     expect(find.text('暂不支持'), findsNothing);
     for (final name in ['相机', '通知', '保存到相册', '电池优化', '自启动']) {
       expect(tester.widget<ListTile>(_row(name)).onTap, isNull);
@@ -267,7 +268,7 @@ void main() {
       permissions.states[AppPermission.camera] = PermissionStatus.granted;
       await tester.tap(find.text('重试'));
       await tester.pumpAndSettle();
-      expect(find.byType(ListTile), findsNWidgets(5));
+      expect(find.byType(ListTile), findsNWidgets(6));
       expect(find.text('无法读取应用权限，请重试'), findsNothing);
     },
   );
@@ -283,7 +284,7 @@ void main() {
     await tester.tap(find.text('继续授权'));
     await tester.pumpAndSettle();
     expect(find.text('无法打开系统设置，请在系统设置中找到本应用后调整权限'), findsOneWidget);
-    expect(find.byType(ListTile), findsNWidgets(5));
+    expect(find.byType(ListTile), findsNWidgets(6));
     expect(find.textContaining('system failure'), findsNothing);
   });
 

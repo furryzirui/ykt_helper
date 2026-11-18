@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <shellapi.h>
+#include <flutter/standard_method_codec.h>
 #include "resource.h"
 
 #include "flutter/generated_plugin_registrant.h"
@@ -11,6 +12,7 @@ constexpr UINT kShowExisting = WM_APP + 41;
 constexpr UINT kTrayMessage = WM_APP + 42;
 constexpr UINT kTrayShow = 1;
 constexpr UINT kTrayExit = 2;
+constexpr UINT kTimedExit = WM_APP + 43;
 }
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool background_start,
@@ -37,6 +39,25 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   startup_channel_ = RegisterAutostartChannel(flutter_controller_->engine(), GetHandle());
+  runtime_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "ykt_helper/background_runtime",
+      &flutter::StandardMethodCodec::GetInstance());
+  runtime_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        if (call.method_name() == "exitApplication") {
+          if (IsWindowVisible(GetHandle()) && !IsIconic(GetHandle())) {
+            result->Success(flutter::EncodableValue(false));
+            return;
+          }
+          // Reply before releasing the engine/window, then use the same clean
+          // shutdown path as the tray Exit command.
+          const bool queued = PostMessageW(GetHandle(), kTimedExit, 0, 0) != FALSE;
+          result->Success(flutter::EncodableValue(queued));
+        } else {
+          result->NotImplemented();
+        }
+      });
   SetPropW(GetHandle(), instance_property_.c_str(), reinterpret_cast<HANDLE>(1));
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
@@ -57,6 +78,7 @@ void FlutterWindow::OnDestroy() {
   UpdateTrayIcon(false);
   RemovePropW(GetHandle(), instance_property_.c_str());
   startup_channel_ = nullptr;
+  runtime_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -100,6 +122,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case kTimedExit:
+      if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) Destroy();
+      return 0;
     case kShowExisting:
       ShowExisting();
       return 0;

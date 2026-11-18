@@ -31,6 +31,7 @@ class FlutterWindow : public Win32Window {
   std::wstring instance_property_;
   bool tray_icon_ = false;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> startup_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> runtime_channel_;
   void ShowExisting();
   void UpdateTrayIcon(bool add);
 

@@ -4,7 +4,14 @@ import 'package:flutter/services.dart';
 import '../domain/models.dart';
 import 'app_autostart.dart';
 
-enum AppPermission { camera, notifications, photos, battery, autostart }
+enum AppPermission {
+  camera,
+  notifications,
+  photos,
+  battery,
+  autostart,
+  location,
+}
 
 enum PermissionStatus {
   granted,
@@ -24,7 +31,8 @@ class AppPermissionState {
 /// confirm each system-settings navigation before calling [openSettings].
 class AppPermissions {
   static const _channel = MethodChannel('ykt_helper/app_permissions');
-  const AppPermissions();
+  final bool locationRequired;
+  const AppPermissions({this.locationRequired = false});
 
   bool get _supported =>
       !kIsWeb &&
@@ -44,7 +52,9 @@ class AppPermissions {
         for (final permission in AppPermission.values)
           AppPermissionState(
             permission: permission,
-            status: !windows || permission == AppPermission.camera
+            status: permission == AppPermission.location
+                ? PermissionStatus.notRequired
+                : !windows || permission == AppPermission.camera
                 ? PermissionStatus.unsupported
                 : permission == AppPermission.autostart
                 ? autostart
@@ -59,9 +69,13 @@ class AppPermissions {
           AppPermissionState(
             permission: permission,
             status:
-                defaultTargetPlatform == TargetPlatform.iOS &&
-                    permission == AppPermission.battery &&
-                    values?[permission.name] == 'unsupported'
+                permission == AppPermission.location &&
+                    (defaultTargetPlatform != TargetPlatform.iOS ||
+                        !locationRequired)
+                ? PermissionStatus.notRequired
+                : defaultTargetPlatform == TargetPlatform.iOS &&
+                      permission == AppPermission.battery &&
+                      values?[permission.name] == 'unsupported'
                 ? PermissionStatus.notRequired
                 : PermissionStatus.values.firstWhere(
                     (status) => status.name == values?[permission.name],

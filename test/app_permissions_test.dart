@@ -77,6 +77,7 @@ void main() {
         PermissionStatus.notRequired,
         PermissionStatus.granted,
         PermissionStatus.needsConfirmation,
+        PermissionStatus.notRequired,
       ]);
       expect(methods, ['check']);
       expect(legacyPermissionCalls, 0);
@@ -155,7 +156,13 @@ void main() {
       });
       final result = await permissions.check();
       expect(
-        result.every((item) => item.status == PermissionStatus.unsupported),
+        result.every(
+          (item) =>
+              item.status ==
+              (item.permission == AppPermission.location
+                  ? PermissionStatus.notRequired
+                  : PermissionStatus.unsupported),
+        ),
         isTrue,
       );
       await expectLater(
@@ -190,7 +197,18 @@ void main() {
       });
       final result = await permissions.check();
       expect(result[3].status, PermissionStatus.notRequired);
-      expect(result.last.status, PermissionStatus.unsupported);
+      expect(
+        result
+            .singleWhere((item) => item.permission == AppPermission.autostart)
+            .status,
+        PermissionStatus.unsupported,
+      );
+      expect(
+        result
+            .singleWhere((item) => item.permission == AppPermission.location)
+            .status,
+        PermissionStatus.notRequired,
+      );
       expect(result[2].status, PermissionStatus.denied);
       expect(await permissions.request(AppPermission.photos), isTrue);
       expect(methods, ['check', 'request']);
@@ -207,8 +225,96 @@ void main() {
       PermissionStatus.notRequired,
     );
     expect(states.first.status, PermissionStatus.unsupported);
-    expect(states.last.status, PermissionStatus.denied);
+    expect(
+      states
+          .singleWhere((item) => item.permission == AppPermission.autostart)
+          .status,
+      PermissionStatus.denied,
+    );
+    expect(
+      states
+          .singleWhere((item) => item.permission == AppPermission.location)
+          .status,
+      PermissionStatus.notRequired,
+    );
   });
+
+  test(
+    'iOS location is required only for the selected location mode',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      for (final nativeState in ['granted', 'denied', 'needsConfirmation']) {
+        messenger.setMockMethodCallHandler(
+          permissionChannel,
+          (_) async => {
+            ...state(),
+            'battery': 'unsupported',
+            'autostart': 'unsupported',
+            'location': nativeState,
+          },
+        );
+        final unused = await permissions.check();
+        expect(
+          unused
+              .singleWhere((item) => item.permission == AppPermission.location)
+              .status,
+          PermissionStatus.notRequired,
+        );
+        final required = await const AppPermissions(
+          locationRequired: true,
+        ).check();
+        expect(
+          required
+              .singleWhere((item) => item.permission == AppPermission.location)
+              .status
+              .name,
+          nativeState,
+        );
+      }
+    },
+  );
+
+  test(
+    'Android location never requests a runtime grant for background service',
+    () async {
+      final selected = <MethodCall>[];
+      messenger.setMockMethodCallHandler(permissionChannel, (call) async {
+        selected.add(call);
+        return {...state(), 'location': 'denied'};
+      });
+      final states = await const AppPermissions(locationRequired: true).check();
+      expect(
+        states
+            .singleWhere((item) => item.permission == AppPermission.location)
+            .status,
+        PermissionStatus.notRequired,
+      );
+      expect(selected.map((call) => call.method), ['check']);
+    },
+  );
+
+  test(
+    'iOS background mode uses native runtime with mode and deadline',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      final runtime = BackgroundRuntime();
+      final deadline = DateTime.now().add(const Duration(minutes: 10));
+      expect(runtime.supported, true);
+      await runtime.configure(
+        mode: BackgroundServiceMode.silentAudio,
+        deadline: deadline,
+      );
+      expect(await runtime.setEnabled(true), true);
+      expect(runtime.enabled, true);
+      expect(calls.last.arguments, {
+        'enabled': true,
+        'mode': 'silentAudio',
+        'deadlineEpochMs': deadline.millisecondsSinceEpoch,
+      });
+      expect(await runtime.setEnabled(false), true);
+      expect(runtime.enabled, false);
+    },
+  );
 
   test(
     'Windows monitoring uses the desktop process without Android services',
@@ -263,7 +369,11 @@ void main() {
         expect(await runtime.setEnabled(true), isFalse);
         expect(runtime.enabled, isFalse);
         expect(calls.last.method, 'setEnabled');
-        expect(calls.last.arguments, {'enabled': false});
+        expect(calls.last.arguments, {
+          'enabled': false,
+          'mode': 'native',
+          'deadlineEpochMs': null,
+        });
       }
       expect(legacyPermissionCalls, 0);
     },
@@ -277,7 +387,11 @@ void main() {
       });
       expect(await BackgroundRuntime().setEnabled(true), isFalse);
       expect(calls.single.method, 'setEnabled');
-      expect(calls.single.arguments, {'enabled': false});
+      expect(calls.single.arguments, {
+        'enabled': false,
+        'mode': 'native',
+        'deadlineEpochMs': null,
+      });
       expect(legacyPermissionCalls, 0);
     },
   );
@@ -296,12 +410,20 @@ void main() {
       expect(runtime.enabled, isTrue);
       expect(calls.map((call) => call.method), ['setEnabled']);
       final config = calls.first.arguments as Map;
-      expect(config, {'enabled': true});
+      expect(config, {
+        'enabled': true,
+        'mode': 'native',
+        'deadlineEpochMs': null,
+      });
       response = state(notifications: 'denied');
       expect(await runtime.setEnabled(true), isFalse);
       expect(runtime.enabled, isFalse);
       expect(calls.last.method, 'setEnabled');
-      expect(calls.last.arguments, {'enabled': false});
+      expect(calls.last.arguments, {
+        'enabled': false,
+        'mode': 'native',
+        'deadlineEpochMs': null,
+      });
       expect(permissionMethods, ['check', 'check']);
       expect(legacyPermissionCalls, 0);
     },
@@ -314,7 +436,11 @@ void main() {
       expect(runtime.enabled, isFalse);
       expect(await runtime.setEnabled(false), isTrue);
       expect(calls.single.method, 'setEnabled');
-      expect(calls.single.arguments, {'enabled': false});
+      expect(calls.single.arguments, {
+        'enabled': false,
+        'mode': 'native',
+        'deadlineEpochMs': null,
+      });
     },
   );
 
@@ -325,7 +451,12 @@ void main() {
       (_) async => {'enabled': false, 'permission': 'needsConfirmation'},
     );
     final states = await permissions.check();
-    expect(states.last.status, PermissionStatus.needsConfirmation);
+    expect(
+      states
+          .singleWhere((item) => item.permission == AppPermission.autostart)
+          .status,
+      PermissionStatus.needsConfirmation,
+    );
   });
 
   test(

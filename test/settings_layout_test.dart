@@ -313,7 +313,7 @@ void main() {
         );
         final autoEnter = find.byKey(const ValueKey('auto-enter'));
         final status = find.byKey(const ValueKey('automation-status'));
-        await tester.tap(autoEnter);
+        tester.widget<SwitchListTile>(autoEnter).onChanged!(true);
         await tester.pumpAndSettle();
         expect(tester.widget<Text>(status).data, '已自动保存');
         _checkStatusGeometry(tester, size, appBar, firstSetting);
@@ -328,7 +328,7 @@ void main() {
         controller
           ..saveError = error
           ..pendingSave = pending;
-        await tester.tap(autoEnter);
+        tester.widget<SwitchListTile>(autoEnter).onChanged!(false);
         await tester.pump();
         _checkStatusGeometry(tester, size, appBar, firstSetting);
         pending.complete();
@@ -408,7 +408,9 @@ void main() {
         expect(ai.requests, hasLength(2));
         ai.requests.last.complete(['vision-model']);
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('auto-enter')));
+        tester
+            .widget<SwitchListTile>(find.byKey(const ValueKey('auto-enter')))
+            .onChanged!(true);
         await tester.pumpAndSettle();
         expect(tester.widget<Text>(status).data, '已自动保存');
         _checkStatusGeometry(tester, size, appBar, firstSetting);
@@ -464,7 +466,7 @@ void main() {
         _checkCardWidths(tester, width);
 
         await _mount(tester, PermissionsPage(permissions: _Permissions()));
-        expect(find.text('无需授权'), findsOneWidget);
+        expect(find.text('无需授权'), findsNWidgets(2));
         _checkCardWidths(tester, width);
         await _capture(tester, 'settings-permissions-$suffix');
         await _reveal(tester, find.text('电池优化'));

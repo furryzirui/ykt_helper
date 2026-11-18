@@ -28,6 +28,20 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>用于扫描雨课堂二维码。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>仅在你选择持续定位后台方案时，使用系统定位更新申请后台运行，不保存或上传设备位置。</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>允许持续定位方案在锁屏或切换应用后接收系统定位更新，以尝试继续课堂自动化；不保存或上传设备位置。</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).classroomMonitoring.*</string>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于选择课堂作答所需图片。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

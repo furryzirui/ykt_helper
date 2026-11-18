@@ -18,13 +18,26 @@ import android.os.PowerManager
 class ClassroomRuntimeService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var running = false
+    private val deadlineCheck = Runnable { armDeadline() }
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val restoring = intent == null || intent.getBooleanExtra("restoring", false)
-        if (!RuntimePermissions.backgroundAllowed(this) || restoring && !YktApplication.mayRestore(this)) {
+        val expired = YktApplication.deadlineExpired(this)
+        val allowed = RuntimePermissions.backgroundAllowed(this)
+        if (expired || !allowed || restoring && !YktApplication.mayRestore(this)) {
+            lastReason = if (expired) "deadline" else if (!allowed) "permission" else "stopped"
+            running = false
             finishStart(false)
+            (application as YktApplication).runtimeChanged()
             stopSelf()
+            if (expired) (application as YktApplication).requestBackgroundExit()
             return START_NOT_STICKY
         }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -62,12 +75,40 @@ class ClassroomRuntimeService : Service() {
             // UI entry later reuses this engine, never a second automation owner.
             (application as YktApplication).engine(background = restoring)
         } catch (_: Exception) {
+            running = false
+            lastReason = "startFailed"
             finishStart(false)
+            (application as YktApplication).runtimeChanged()
             stopSelf()
             return START_NOT_STICKY
         }
+        running = true
+        lastReason = null
+        armDeadline()
+        if (!running) return START_NOT_STICKY
+        (application as YktApplication).runtimeChanged()
         finishStart(true)
         return if (YktApplication.mayRestore(this)) START_STICKY else START_NOT_STICKY
+    }
+
+    private fun armDeadline() {
+        handler.removeCallbacks(deadlineCheck)
+        if (!running) return
+        val remaining = YktApplication.deadlineRemaining(this) ?: return
+        if (remaining <= 0) {
+            YktApplication.deadlineExpired(this)
+            running = false
+            lastReason = "deadline"
+            finishStart(false)
+            (application as YktApplication).runtimeChanged()
+            stopSelf()
+            (application as YktApplication).requestBackgroundExit()
+            return
+        }
+        // Recheck the wall clock at least once a minute as well as at expiry.
+        // elapsedRealtime handles clock rollback; no exact-alarm permission is
+        // needed because this foreground service already holds a CPU wake lock.
+        handler.postDelayed(deadlineCheck, minOf(remaining, 60_000L))
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -78,11 +119,17 @@ class ClassroomRuntimeService : Service() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(deadlineCheck)
+        running = false
+        if (lastReason == null) lastReason = "stopped"
         wakeLock?.let { if (it.isHeld) it.release() }
         wifiLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         wifiLock = null
         stopForeground(STOP_FOREGROUND_REMOVE)
+        if (instance === this) instance = null
+        finishStart(false)
+        (application as YktApplication).runtimeChanged()
         super.onDestroy()
     }
 
@@ -93,6 +140,8 @@ class ClassroomRuntimeService : Service() {
         private const val NOTIFICATION_ID = 1
         private val starts = mutableListOf<(Boolean) -> Unit>()
         private val handler = Handler(Looper.getMainLooper())
+        private var instance: ClassroomRuntimeService? = null
+        private var lastReason: String? = null
 
         private fun finishStart(success: Boolean) {
             val pending = starts.toList()
@@ -113,6 +162,37 @@ class ClassroomRuntimeService : Service() {
                 throw error
             }
         }
-        fun stop(context: Context) { context.stopService(Intent(context, ClassroomRuntimeService::class.java)) }
+        fun deadlineChanged(context: Context) {
+            val expired = YktApplication.deadlineExpired(context)
+            if (!expired && lastReason == "deadline") lastReason = "stopped"
+            val service = instance
+            if (service != null) {
+                service.armDeadline()
+            } else if (expired) {
+                lastReason = "deadline"
+            }
+        }
+
+        fun status(context: Context): Map<String, Any?> = mapOf(
+            "enabled" to (instance?.running == true && !YktApplication.deadlineExpired(context)),
+            "mode" to "native",
+            "deadlineEpochMs" to YktApplication.deadline(context)?.epochMs,
+            "reason" to if (YktApplication.deadlineExpired(context)) "deadline" else lastReason
+        )
+
+        fun stop(context: Context, reason: String = "stopped") {
+            val wasRunning = instance?.running == true
+            val previousReason = lastReason
+            lastReason = if (YktApplication.deadlineExpired(context)) "deadline" else reason
+            instance?.let {
+                handler.removeCallbacks(it.deadlineCheck)
+                it.running = false
+            }
+            finishStart(false)
+            context.stopService(Intent(context, ClassroomRuntimeService::class.java))
+            if (wasRunning || lastReason != previousReason) {
+                (context.applicationContext as? YktApplication)?.runtimeChanged()
+            }
+        }
     }
 }

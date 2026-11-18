@@ -8,6 +8,8 @@ import UserNotifications
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var permissionPending = false
   private var galleryPending = false
+  private var backgroundRuntime: IOSBackgroundRuntime?
+  private let locationPermissions = IOSLocationPermissions()
 
   override func application(
     _ application: UIApplication,
@@ -19,6 +21,7 @@ import UserNotifications
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
+    backgroundRuntime = IOSBackgroundRuntime(messenger: messenger)
     let integrity = FlutterMethodChannel(
       name: "ykt_helper/integrity", binaryMessenger: messenger
     )
@@ -44,7 +47,7 @@ import UserNotifications
       case "request", "openSettings":
         guard let arguments = call.arguments as? [String: Any],
               let permission = arguments["permission"] as? String,
-              ["camera", "notifications", "photos", "battery"].contains(permission) else {
+              ["camera", "notifications", "photos", "battery", "location"].contains(permission) else {
           result(FlutterError(code: "invalid_permission", message: "无法识别此权限设置", details: nil))
           return
         }
@@ -95,13 +98,15 @@ import UserNotifications
   private func checkPermissions(result: @escaping FlutterResult) {
     let camera = cameraState()
     let photos = photosState()
+    let location = locationPermissions.state
     UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
       guard let self = self else { return }
       let notifications = self.notificationsState(settings)
       DispatchQueue.main.async {
         result([
           "camera": camera, "photos": photos,
-          "notifications": notifications, "battery": "unsupported", "autostart": "unsupported"
+          "notifications": notifications, "battery": "unsupported", "autostart": "unsupported",
+          "location": location
         ])
       }
     }
@@ -143,6 +148,17 @@ import UserNotifications
     }
     permissionPending = true
     switch permission {
+    case "location":
+      locationPermissions.request { [weak self] value in
+        guard let self = self else { return }
+        if let error = value as? FlutterError,
+           ["location_denied", "location_needs_always", "location_disabled"].contains(error.code) {
+          // The Flutter explanation includes the application-settings fallback.
+          self.openDeniedPermissionSettings(result: result)
+        } else {
+          self.finishPermission(result, value: value)
+        }
+      }
     case "camera":
       switch AVCaptureDevice.authorizationStatus(for: .video) {
       case .authorized:

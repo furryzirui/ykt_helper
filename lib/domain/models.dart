@@ -278,6 +278,16 @@ enum AnswerMode { fixed, ai }
 
 enum SlideScope { none, current, currentAndNext, all }
 
+enum BackgroundServiceMode {
+  native,
+  silentAudio,
+  pictureInPicture,
+  location,
+  continuedTask,
+}
+
+const serviceTimeoutOptions = [0, 10, 120, 1440];
+
 const defaultAiPrompt = '请使用最简洁的回答完成这道题：{question}';
 const defaultSlidePrompt = '可以参考课程课件进行完成';
 const defaultFixedSingleAnswer = 'A';
@@ -291,6 +301,9 @@ class AppSettings {
   /// deliberately not persisted.
   bool autoStartService, appAutoStart, autoEnter, autoAnswer, autoSubmit;
   int autoSubmitDelaySeconds;
+  int serviceTimeoutMinutes;
+  BackgroundServiceMode backgroundMode;
+  String? iosBackgroundConsentMode;
   AnswerMode answerMode;
   String fixedSingleAnswer,
       fixedMultipleAnswer,
@@ -305,6 +318,9 @@ class AppSettings {
     this.autoAnswer = false,
     this.autoSubmit = false,
     this.autoSubmitDelaySeconds = 30,
+    this.serviceTimeoutMinutes = 0,
+    this.backgroundMode = BackgroundServiceMode.silentAudio,
+    this.iosBackgroundConsentMode,
     this.answerMode = AnswerMode.fixed,
     String fixedAnswer = '',
     String? fixedSingleAnswer,
@@ -394,6 +410,17 @@ class AppSettings {
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
     autoSubmitDelaySeconds: integer(json['autoSubmitDelaySeconds'], 30),
+    serviceTimeoutMinutes:
+        serviceTimeoutOptions.contains(json['serviceTimeoutMinutes'])
+        ? integer(json['serviceTimeoutMinutes'])
+        : 0,
+    backgroundMode: BackgroundServiceMode.values.firstWhere(
+      (mode) => mode.name == json['backgroundMode'],
+      orElse: () => BackgroundServiceMode.silentAudio,
+    ),
+    iosBackgroundConsentMode: json['iosBackgroundConsentMode'] is String
+        ? json['iosBackgroundConsentMode'] as String
+        : null,
     answerMode: json['answerMode'] == 'ai' ? AnswerMode.ai : AnswerMode.fixed,
     fixedAnswer: str(json['fixedAnswer']),
     fixedSingleAnswer: json.containsKey('fixedSingleAnswer')
@@ -429,6 +456,9 @@ class AppSettings {
     'autoAnswer': autoAnswer,
     'autoSubmit': autoSubmit,
     'autoSubmitDelaySeconds': autoSubmitDelaySeconds,
+    'serviceTimeoutMinutes': serviceTimeoutMinutes,
+    'backgroundMode': backgroundMode.name,
+    'iosBackgroundConsentMode': iosBackgroundConsentMode,
     'answerMode': answerMode.name,
     'fixedSingleAnswer': fixedSingleAnswer,
     'fixedMultipleAnswer': fixedMultipleAnswer,

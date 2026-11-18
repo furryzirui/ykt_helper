@@ -19,6 +19,14 @@ class _Store implements KeyValueStore {
 }
 
 class _Background extends BackgroundRuntime {
+  @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+  @override
+  Future<BackgroundRuntimeState?> status() async => null;
+
   bool active = false;
   int calls = 0;
 

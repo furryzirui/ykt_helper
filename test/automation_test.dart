@@ -26,6 +26,14 @@ class MemoryStore implements KeyValueStore {
 }
 
 class NoBackground extends BackgroundRuntime {
+  @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+  @override
+  Future<BackgroundRuntimeState?> status() async => null;
+
   bool active = false;
   @override
   bool get enabled => active;
@@ -51,6 +59,7 @@ class FakeRain extends RainApi {
   Map<String, AnswerRecord> remote = {};
   Completer<Map<String, AnswerRecord>>? pendingAnswers;
   Completer<ClassroomSession>? pendingCheckin;
+  Completer<Presentation>? pendingPresentation;
   AttendanceStatus attendanceValue = AttendanceStatus.unknown;
   bool failAttendance = false;
   Completer<AttendanceStatus>? pendingAttendance;
@@ -78,7 +87,7 @@ class FakeRain extends RainApi {
     String presentationId, {
     ClassroomSession? session,
     bool withAnswers = true,
-  }) async => decks[presentationId]!;
+  }) async => pendingPresentation?.future ?? decks[presentationId]!;
   @override
   Future<Map<String, AnswerRecord>> ownAnswers(
     String lessonId,
@@ -199,6 +208,53 @@ void main() {
       connectSockets: false,
     )..account = const Account(id: 'u', name: '测试');
   }
+
+  test(
+    'a presentation fetched before suspension cannot restore stale state',
+    () async {
+      final live = await controller.enter(lesson);
+      final pending = Completer<Presentation>();
+      api.pendingPresentation = pending;
+      final oldHello = controller.processEvent(live, hello());
+      await Future<void>.delayed(Duration.zero);
+
+      controller.setForeground(false);
+      controller.setForeground(true);
+      api.pendingPresentation = null;
+      pending.complete(api.decks['p']!);
+      await oldHello;
+
+      expect(live.presentations, isEmpty);
+      expect(live.presentationId, isNull);
+      expect(live.activeProblemIds, isEmpty);
+      await controller.processEvent(live, hello());
+      expect(live.presentationId, 'p');
+    },
+  );
+
+  test(
+    'an unlock fetched before suspension cannot reactivate an old question',
+    () async {
+      final live = await controller.enter(lesson);
+      final pending = Completer<Presentation>();
+      api.pendingPresentation = pending;
+      final oldUnlock = controller.processEvent(live, unlock(deck: 'p'));
+      await Future<void>.delayed(Duration.zero);
+
+      controller.setForeground(false);
+      controller.setForeground(true);
+      api.pendingPresentation = null;
+      pending.complete(api.decks['p']!);
+      await oldUnlock;
+
+      expect(live.activeProblemIds, isEmpty);
+      expect(live.launches, isEmpty);
+      expect(live.questions, isEmpty);
+      await controller.processEvent(live, hello());
+      await controller.processEvent(live, unlock());
+      expect(live.activeProblemIds, contains('q'));
+    },
+  );
 
   test(
     'automatic answers only fill a draft until confirmed by default',
@@ -353,33 +409,30 @@ void main() {
     expect(api.submissions, 0);
   });
 
-  test(
-    'saving fixed automation retains missing answer categories',
-    () async {
-      controller.account = null;
-      for (final missing in ['single', 'multiple', 'judgment', 'subjective']) {
-        final settings = AppSettings(
-          autoAnswer: true,
-          fixedSingleAnswer: missing == 'single' ? ' ' : 'A',
-          fixedMultipleAnswer: missing == 'multiple' ? '' : 'AB',
-          fixedJudgmentAnswer: missing == 'judgment' ? '' : 'A',
-          fixedSubjectiveAnswer: missing == 'subjective' ? '\n' : '文字答案',
-        );
-        await controller.saveSettings(settings);
-        expect(controller.settings.toJson(), settings.toJson());
-      }
-      await controller.saveSettings(
-        AppSettings(
-          autoAnswer: true,
-          fixedSingleAnswer: 'A',
-          fixedMultipleAnswer: 'AB',
-          fixedSubjectiveAnswer: '文字答案',
-        ),
+  test('saving fixed automation retains missing answer categories', () async {
+    controller.account = null;
+    for (final missing in ['single', 'multiple', 'judgment', 'subjective']) {
+      final settings = AppSettings(
+        autoAnswer: true,
+        fixedSingleAnswer: missing == 'single' ? ' ' : 'A',
+        fixedMultipleAnswer: missing == 'multiple' ? '' : 'AB',
+        fixedJudgmentAnswer: missing == 'judgment' ? '' : 'A',
+        fixedSubjectiveAnswer: missing == 'subjective' ? '\n' : '文字答案',
       );
-      expect(controller.settings.autoAnswer, true);
-      expect(controller.settings.fixedMultipleAnswer, 'AB');
-    },
-  );
+      await controller.saveSettings(settings);
+      expect(controller.settings.toJson(), settings.toJson());
+    }
+    await controller.saveSettings(
+      AppSettings(
+        autoAnswer: true,
+        fixedSingleAnswer: 'A',
+        fixedMultipleAnswer: 'AB',
+        fixedSubjectiveAnswer: '文字答案',
+      ),
+    );
+    expect(controller.settings.autoAnswer, true);
+    expect(controller.settings.fixedMultipleAnswer, 'AB');
+  });
 
   test(
     'ambiguous single-choice fixed answer still fails strict parsing',

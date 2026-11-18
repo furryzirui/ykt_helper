@@ -73,6 +73,14 @@ class _Autostart extends AppAutostart {
 }
 
 class _Background extends BackgroundRuntime {
+  @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+  @override
+  Future<BackgroundRuntimeState?> status() async => null;
+
   final bool available;
   final requests = <bool>[];
   bool active = false;

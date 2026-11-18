@@ -9,6 +9,9 @@ import '../app/app_controller.dart';
 import '../domain/models.dart';
 import '../services/ai_answer.dart';
 import '../services/app_logs.dart';
+import '../services/app_permissions.dart';
+import 'background_service_confirmation.dart';
+import 'permissions_page.dart';
 import 'settings_widgets.dart';
 import 'widgets.dart';
 
@@ -49,6 +52,7 @@ class _AutomationPageState extends State<AutomationPage>
   String? _autostartPermission;
   bool _checkingAutostartPermission = false;
   int _autostartPermissionGeneration = 0;
+  int _backgroundModeRevision = 0;
   Future<bool>? _latestPermissionCheck;
   bool get _windows => defaultTargetPlatform == TargetPlatform.windows;
   bool get _windowsAutostartAllowed =>
@@ -281,7 +285,10 @@ class _AutomationPageState extends State<AutomationPage>
             ..autoAnswer = committed.autoAnswer
             ..autoSubmit = committed.autoSubmit
             ..autoStartService = committed.autoStartService
-            ..appAutoStart = committed.appAutoStart;
+            ..appAutoStart = committed.appAutoStart
+            ..backgroundMode = committed.backgroundMode
+            ..iosBackgroundConsentMode = committed.iosBackgroundConsentMode
+            ..serviceTimeoutMinutes = committed.serviceTimeoutMinutes;
           _dirty = !_sameSettings(_draft!, committed);
           if (!_dirty) {
             _hasSaved = true;
@@ -463,6 +470,129 @@ class _AutomationPageState extends State<AutomationPage>
   }
 
   Widget _settingIcon(IconData icon) => TintedIcon(icon);
+
+  bool get _ios => defaultTargetPlatform == TargetPlatform.iOS;
+
+  Future<bool> _confirmBackgroundMode(
+    BackgroundServiceMode mode, {
+    bool starting = false,
+  }) async {
+    if (!_ios) return true;
+    if (!await confirmIosBackgroundService(context, mode, starting: starting)) {
+      return false;
+    }
+    if (!mounted) return false;
+    if (starting && mode == BackgroundServiceMode.location) {
+      return ensureAppPermission(
+        context,
+        AppPermission.location,
+        permissions: const AppPermissions(locationRequired: true),
+      );
+    }
+    return true;
+  }
+
+  Future<void> _setAutoStartService(bool value) async {
+    final mode = _draft!.backgroundMode;
+    if (value && _ios && mode == BackgroundServiceMode.continuedTask) return;
+    if (value && !await _confirmBackgroundMode(mode, starting: true)) return;
+    if (!mounted) return;
+    final settings = _draft!;
+    if (value && settings.backgroundMode != mode) return;
+    _edit(() {
+      settings.autoStartService = value;
+      if (value && _ios) settings.iosBackgroundConsentMode = mode.name;
+      if (!value) settings.appAutoStart = false;
+    });
+  }
+
+  Future<void> _setBackgroundMode(BackgroundServiceMode? mode) async {
+    if (mode == null || mode == _draft!.backgroundMode) return;
+    final confirmed = await _confirmBackgroundMode(mode);
+    if (!mounted) return;
+    if (!confirmed) {
+      // A FormField updates its local selection before this async confirmation.
+      // Recreate it so cancellation also restores the displayed saved choice.
+      setState(() => _backgroundModeRevision++);
+      return;
+    }
+    _edit(() {
+      _draft!.backgroundMode = mode;
+      if (_ios) _draft!.iosBackgroundConsentMode = mode.name;
+      if (mode == BackgroundServiceMode.continuedTask) {
+        _draft!
+          ..autoStartService = false
+          ..appAutoStart = false;
+      }
+    });
+  }
+
+  Widget _backgroundModeSetting(AppSettings settings) {
+    final modes = _ios
+        ? [
+            BackgroundServiceMode.silentAudio,
+            BackgroundServiceMode.pictureInPicture,
+            BackgroundServiceMode.location,
+            BackgroundServiceMode.continuedTask,
+          ]
+        : [BackgroundServiceMode.native];
+    final selected = modes.contains(settings.backgroundMode)
+        ? settings.backgroundMode
+        : modes.first;
+    String label(BackgroundServiceMode mode) =>
+        mode == BackgroundServiceMode.native
+        ? _windows
+              ? '应用进程'
+              : '前台服务'
+        : backgroundServiceModeLabel(mode);
+    return Padding(
+      key: const ValueKey('background-service-mode'),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _settingIcon(Icons.layers_outlined),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DropdownButtonFormField<BackgroundServiceMode>(
+                  key: ValueKey(
+                    'background-mode-${selected.name}-$_backgroundModeRevision',
+                  ),
+                  initialValue: selected,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: '后台服务实现方案'),
+                  items: [
+                    for (final mode in modes)
+                      DropdownMenuItem(
+                        value: mode,
+                        child: Text(
+                          label(mode),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: _disabled || modes.length == 1
+                      ? null
+                      : _setBackgroundMode,
+                ),
+                const SizedBox(height: 4),
+                SettingDescription(
+                  _ios ? '实验性后台运行方式，切换前需确认限制' : '当前平台使用默认后台运行方式',
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _setAppAutoStart(bool enabled) async {
     if (!enabled) {
@@ -671,6 +801,9 @@ class _AutomationPageState extends State<AutomationPage>
       final settings = _draft!;
       final windows = _windows;
       final hasAutomation = settings.autoEnter || settings.autoAnswer;
+      final manualBackgroundOnly =
+          _ios &&
+          settings.backgroundMode == BackgroundServiceMode.continuedTask;
       final showAppAutoStart = c.systemServiceSupported || windows;
       return PopScope(
         canPop: _canPop,
@@ -698,17 +831,21 @@ class _AutomationPageState extends State<AutomationPage>
                             Icons.power_settings_new_rounded,
                           ),
                           title: const Text('自动启动服务'),
-                          subtitle: SettingDescription('启用自动化时自动启动后台服务'),
-                          value: settings.autoStartService,
+                          subtitle: SettingDescription(
+                            manualBackgroundOnly
+                                ? '此方案需每次手动启动'
+                                : '启用自动化时自动启动后台服务',
+                          ),
+                          value:
+                              !manualBackgroundOnly &&
+                              settings.autoStartService,
                           onChanged:
                               _disabled ||
+                                  manualBackgroundOnly ||
                                   !c.systemServiceSupported ||
                                   !(settings.autoEnter || settings.autoAnswer)
                               ? null
-                              : (value) => _edit(() {
-                                  settings.autoStartService = value;
-                                  if (!value) settings.appAutoStart = false;
-                                }),
+                              : _setAutoStartService,
                         )
                       else
                         ListTile(
@@ -740,15 +877,18 @@ class _AutomationPageState extends State<AutomationPage>
                           secondary: _settingIcon(Icons.restart_alt_rounded),
                           title: const Text('应用自启动'),
                           subtitle: SettingDescription(
-                            windows
+                            _ios
+                                ? 'iOS 不支持应用自启动'
+                                : windows
                                 ? _windowsAutostartDescription
                                 : !settings.autoStartService
                                 ? '请在启用自动启动服务后开启'
                                 : '开机后恢复自动化，需在系统中允许自启动',
                           ),
-                          value: settings.appAutoStart,
+                          value: !_ios && settings.appAutoStart,
                           onChanged:
                               _disabled ||
+                                  _ios ||
                                   !hasAutomation ||
                                   windows &&
                                       !_windowsAutostartAllowed &&
@@ -759,6 +899,8 @@ class _AutomationPageState extends State<AutomationPage>
                               : _setAppAutoStart,
                         ),
                       ],
+                      const Divider(height: 1),
+                      _backgroundModeSetting(settings),
                       const Divider(height: 1),
                       SwitchListTile(
                         key: const ValueKey('auto-enter'),

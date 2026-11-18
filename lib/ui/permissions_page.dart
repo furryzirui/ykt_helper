@@ -10,6 +10,7 @@ String _permissionName(AppPermission permission) => switch (permission) {
   AppPermission.photos => '保存到相册',
   AppPermission.battery => '电池优化',
   AppPermission.autostart => '自启动',
+  AppPermission.location => '定位',
 };
 
 IconData _permissionIcon(AppPermission permission) => switch (permission) {
@@ -18,6 +19,7 @@ IconData _permissionIcon(AppPermission permission) => switch (permission) {
   AppPermission.photos => Icons.photo_library_outlined,
   AppPermission.battery => Icons.battery_saver_outlined,
   AppPermission.autostart => Icons.restart_alt_rounded,
+  AppPermission.location => Icons.location_on_outlined,
 };
 
 String _statusText(AppPermission permission, PermissionStatus status) =>
@@ -52,6 +54,8 @@ String _permissionExplanation(AppPermission permission, bool request) {
         '用于将课件图片写入系统相册，无需读取你的照片。\n\n确认后申请添加照片权限；若已拒绝，将打开本应用设置，请允许添加照片后返回。',
       AppPermission.battery => 'iOS 不提供本应用的电池优化豁免设置。',
       AppPermission.autostart => 'iOS 暂不支持应用自启动。',
+      AppPermission.location =>
+        '仅用于持续定位保活，尝试在锁屏或切换应用后运行自动化，可能明显增加耗电并显示定位指示。定位数据不会上传，也不用于课堂签到。\n\n请先允许使用定位；系统提供“始终允许”时请选择该项。若没有出现该选项，请到本应用设置 → 定位 → 始终，或等待系统后续询问。授权后返回应用。',
     };
   }
   if (!request) {
@@ -62,6 +66,7 @@ String _permissionExplanation(AppPermission permission, bool request) {
       AppPermission.photos => '用于将课件图片保存到系统相册。\n\n将打开本应用详情，请进入“权限”管理存储授权。',
       AppPermission.battery => _batteryExplanation,
       AppPermission.autostart => '',
+      AppPermission.location => '当前平台无需定位授权。',
     };
   }
   return switch (permission) {
@@ -73,6 +78,7 @@ String _permissionExplanation(AppPermission permission, bool request) {
       '用于将课件图片保存到系统相册。\n\n请在系统弹窗中允许存储；无法弹出时进入本应用设置的“权限”，允许存储后返回重试。',
     AppPermission.battery => _batteryExplanation,
     AppPermission.autostart => '',
+    AppPermission.location => '当前平台无需定位授权。',
   };
 }
 
@@ -138,16 +144,19 @@ Future<bool> ensureAppPermission(
       final prepareWindowsStartup =
           defaultTargetPlatform == TargetPlatform.windows &&
           permission == AppPermission.autostart;
+      final requestIosLocation =
+          defaultTargetPlatform == TargetPlatform.iOS &&
+          permission == AppPermission.location;
       if (!await showPermissionSettingsExplanation(
         context,
         permission,
-        request: prepareWindowsStartup,
+        request: prepareWindowsStartup || requestIosLocation,
       )) {
         return false;
       }
       if (!context.mounted) return false;
       try {
-        if (prepareWindowsStartup) {
+        if (prepareWindowsStartup || requestIosLocation) {
           if (!await permissions.request(permission)) return false;
           final states = await permissions.check();
           return states
@@ -157,7 +166,12 @@ Future<bool> ensureAppPermission(
         }
         await permissions.openSettings(permission);
       } catch (_) {
-        if (context.mounted) _permissionError(context, '无法打开系统设置，请手动检查自启动');
+        if (context.mounted) {
+          _permissionError(
+            context,
+            requestIosLocation ? '无法申请定位权限，请在系统设置中检查定位授权' : '无法打开系统设置，请手动检查自启动',
+          );
+        }
       }
       return false;
     case PermissionStatus.denied:
@@ -189,7 +203,12 @@ Future<bool> ensureAppPermission(
 
 class PermissionsPage extends StatefulWidget {
   final AppPermissions permissions;
-  const PermissionsPage({super.key, this.permissions = const AppPermissions()});
+  final bool locationRequired;
+  const PermissionsPage({
+    super.key,
+    this.permissions = const AppPermissions(),
+    this.locationRequired = false,
+  });
 
   @override
   State<PermissionsPage> createState() => _PermissionsPageState();
@@ -232,6 +251,10 @@ class _PermissionsPageState extends State<PermissionsPage>
       final result = {
         for (final state in states) state.permission: state.status,
       };
+      if (defaultTargetPlatform != TargetPlatform.iOS ||
+          !widget.locationRequired) {
+        result[AppPermission.location] = PermissionStatus.notRequired;
+      }
       if (result.length != AppPermission.values.length ||
           states.length != AppPermission.values.length) {
         throw StateError('Incomplete permission states');
@@ -257,6 +280,9 @@ class _PermissionsPageState extends State<PermissionsPage>
     try {
       final request =
           _states?[permission] == PermissionStatus.denied ||
+          defaultTargetPlatform == TargetPlatform.iOS &&
+              permission == AppPermission.location &&
+              _states?[permission] == PermissionStatus.needsConfirmation ||
           defaultTargetPlatform == TargetPlatform.windows &&
               permission == AppPermission.autostart &&
               _states?[permission] == PermissionStatus.needsConfirmation;

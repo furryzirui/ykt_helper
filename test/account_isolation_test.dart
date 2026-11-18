@@ -34,6 +34,14 @@ class DelayedStore implements KeyValueStore {
 }
 
 class NoBackground extends BackgroundRuntime {
+  @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+  @override
+  Future<BackgroundRuntimeState?> status() async => null;
+
   bool active = false;
 
   @override

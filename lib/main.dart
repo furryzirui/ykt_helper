@@ -7,6 +7,7 @@ import 'ui/app.dart';
 void main(List<String> arguments) {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = AppController();
+  controller.setForeground(!arguments.contains('--background-auto-start'));
   FlutterError.onError = (details) {
     controller.logs.add(AppLogEvent.failure, success: false);
     FlutterError.presentError(details);
@@ -14,7 +15,10 @@ void main(List<String> arguments) {
   final foreground = ValueNotifier<bool>(
     !arguments.contains('--background-auto-start'),
   );
-  AppAutostart.setForegroundListener(() => foreground.value = true);
+  AppAutostart.setForegroundListener(() {
+    controller.setForeground(true);
+    foreground.value = true;
+  });
   runApp(
     ValueListenableBuilder<bool>(
       valueListenable: foreground,

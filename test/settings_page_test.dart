@@ -26,6 +26,14 @@ class _Store implements KeyValueStore {
 
 class _Background extends BackgroundRuntime {
   @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+  @override
+  Future<BackgroundRuntimeState?> status() async => null;
+
+  @override
   bool get enabled => true;
   @override
   Future<bool> setEnabled(bool enabled) async => true;
@@ -581,13 +589,18 @@ void main() {
     await _close(tester, controller);
   });
 
-  testWidgets('iOS不提供自启动开关，Windows无需服务显示完成图标', (tester) async {
+  testWidgets('iOS自启动常驻禁用且可选后台方案，Windows无需服务显示完成图标', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final controller = _Controller(_Ai());
     await _show(tester, controller);
-    expect(_setting('app-auto-start'), findsNothing);
-    expect(find.text('当前平台需保持应用前台运行'), findsOneWidget);
+    expect(_setting('app-auto-start'), findsOneWidget);
+    expect(
+      tester.widget<SwitchListTile>(_setting('app-auto-start')).onChanged,
+      isNull,
+    );
+    expect(find.text('iOS 不支持应用自启动'), findsOneWidget);
+    expect(find.text('静音音频保活'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     await _show(tester, controller);

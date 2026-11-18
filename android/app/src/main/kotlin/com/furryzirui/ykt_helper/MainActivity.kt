@@ -30,6 +30,16 @@ class MainActivity : FlutterActivity() {
 
     override fun shouldDestroyEngineWithHost(): Boolean = false
 
+    override fun onStart() {
+        super.onStart()
+        (application as YktApplication).windowVisible(true)
+    }
+
+    override fun onStop() {
+        (application as YktApplication).windowVisible(false)
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         (application as YktApplication).foreground(true)

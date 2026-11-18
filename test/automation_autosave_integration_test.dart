@@ -59,6 +59,16 @@ class _Background extends BackgroundRuntime {
   bool active = false;
 
   @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+
+  @override
+  Future<BackgroundRuntimeState?> status() async =>
+      BackgroundRuntimeState(enabled: active);
+
+  @override
   bool get supported => true;
 
   @override

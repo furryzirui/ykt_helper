@@ -74,6 +74,14 @@ class _MemoryStore implements KeyValueStore {
 
 class _NoBackground extends BackgroundRuntime {
   @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+  @override
+  Future<BackgroundRuntimeState?> status() async => null;
+
+  @override
   bool get enabled => true;
   @override
   Future<bool> setEnabled(bool enabled) async => true;
