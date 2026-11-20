@@ -663,6 +663,59 @@ void main() {
   });
 
   test(
+    'automatic position cancellation after the fresh query prevents POST',
+    () async {
+      var allowed = true;
+      var queries = 0;
+      final transport = FakeTransport((r) {
+        expect(r.uri.path.endsWith('/submit'), false);
+        queries++;
+        if (queries == 2) allowed = false;
+        return ok({
+          'signed': false,
+          'needLocationSignIn': true,
+          'session': {'id': 'round', 'centerLat': 30, 'centerLng': 120},
+        });
+      });
+      final api = client(transport);
+      final target = await api.locationStatus(session);
+      expect(
+        await api.locationSubmit(session, target, shouldSubmit: () => allowed),
+        false,
+      );
+      expect(queries, 2);
+    },
+  );
+
+  test('a delayed location status cannot adopt a new round', () async {
+    final response = Completer<ResponseBody>();
+    final started = Completer<void>();
+    final api = client(
+      FakeTransport((r) {
+        started.complete();
+        return response.future;
+      }),
+    );
+    final pending = api.locationStatus(session);
+    final check = expectLater(pending, throwsA(isA<ApiFailure>()));
+    await started.future;
+    api.locationRoundChanged(session.lessonId);
+    response.complete(ok({'signed': true, 'needLocationSignIn': false}));
+    await check;
+  });
+
+  test(
+    'explicit position signed evidence needs no unused target coordinates',
+    () async {
+      final api = client(FakeTransport((r) => ok({'signed': true})));
+      final status = await api.locationStatus(session);
+      expect(status.signed, true);
+      expect(status.available, false);
+      expect(await api.locationSubmit(session, status), true);
+    },
+  );
+
+  test(
     'answer submission keeps the protocol type and millisecond time',
     () async {
       final transport = FakeTransport((r) {

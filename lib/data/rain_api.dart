@@ -545,7 +545,13 @@ class RainApi {
     }
     // oldVersion is evidenced on lesson-info.data, not the history row.
     // Read it before requesting report parts that use the current protocol.
-    final info = await _report('lesson-info', lesson.id);
+    final Json info;
+    try {
+      info = await _report('lesson-info', lesson.id);
+    } on ApiFailure catch (failure) {
+      if (failure.message != 'lesson_on') rethrow;
+      return LessonDetail(lesson: _inProgress(lesson));
+    }
     if (lesson.courseId.isNotEmpty) {
       _match(info, 'courseId', lesson.courseId, '课堂课程');
     }
@@ -575,15 +581,22 @@ class RainApi {
       try {
         return await future;
       } catch (e) {
+        if (e is ApiFailure && e.message == 'lesson_on') rethrow;
         warnings.add('$label：$e');
         return {};
       }
     }
 
-    final results = await Future.wait([
-      _report('detail', lesson.id),
-      optional(_report('review', lesson.id), '课堂回顾读取失败'),
-    ]);
+    final List<Json> results;
+    try {
+      results = await Future.wait([
+        _report('detail', lesson.id),
+        optional(_report('review', lesson.id), '课堂回顾读取失败'),
+      ]);
+    } on ApiFailure catch (failure) {
+      if (failure.message != 'lesson_on') rethrow;
+      return LessonDetail(lesson: _inProgress(resolvedLesson));
+    }
     final details = results[0], review = results[1];
     Map<String, AnswerRecord> answers = {};
     var answersKnown = true;
@@ -615,6 +628,15 @@ class RainApi {
       warnings: warnings,
     );
   }
+
+  Lesson _inProgress(Lesson lesson) => Lesson(
+    id: lesson.id,
+    courseId: lesson.courseId,
+    classroomId: lesson.classroomId,
+    title: lesson.title,
+    startedAt: lesson.startedAt,
+    live: true,
+  );
 
   Future<AttendanceStatus> attendance(Lesson lesson) async {
     final report = await _report('detail', lesson.id);
@@ -905,6 +927,7 @@ class RainApi {
   }
 
   Future<LocationCheckin> locationStatus(ClassroomSession session) async {
+    final round = _locationRounds[session.lessonId] ?? 0;
     final response = _json(
       (await _request(
         '/api/v3/lesson/location-checkin/eligibility',
@@ -912,6 +935,9 @@ class RainApi {
       )).data,
     );
     final data = response['data'] is Map ? object(response['data']) : response;
+    if (round != (_locationRounds[session.lessonId] ?? 0)) {
+      throw const ApiFailure('位置签到轮次已变化，请重新查询');
+    }
     _match(data, 'lessonId', session.lessonId, '位置签到课堂');
     final target = object(data['session']);
     double? lat = _coordinate(target['centerLat'], 90),
@@ -920,29 +946,28 @@ class RainApi {
       lat = _coordinate(data['lat'], 90);
       lng = _coordinate(data['lng'], 180);
     }
-    if (_flag(data['signed']) == null ||
-        _flag(data['needLocationSignIn']) == null) {
+    final signed = _flag(data['signed']);
+    final needsLocation = _flag(data['needLocationSignIn']);
+    if (signed == null || !signed && needsLocation == null) {
       throw const ApiFailure('服务端未返回完整位置签到状态');
     }
     return LocationCheckin(
-      signed: _flag(data['signed']) == true,
-      available:
-          _flag(data['needLocationSignIn']) == true &&
-          lat != null &&
-          lng != null,
+      signed: signed,
+      available: needsLocation == true && lat != null && lng != null,
       latitude: lat,
       longitude: lng,
       address: firstText([data['address'], target['address']]),
-      roundId:
-          '${_locationRounds[session.lessonId] ?? 0}:${target['id'] ?? data['sessionId'] ?? ''}',
+      roundId: '$round:${target['id'] ?? data['sessionId'] ?? ''}',
     );
   }
 
   Future<bool> locationSubmit(
     ClassroomSession session,
-    LocationCheckin confirmed,
-  ) {
-    final key = '${session.lessonId}|${confirmed.fingerprint}';
+    LocationCheckin confirmed, {
+    bool Function()? shouldSubmit,
+  }) {
+    final key =
+        '${session.lessonId}|${session.userId}|${session.bearer}|${confirmed.fingerprint}';
     return _locationPending.putIfAbsent(key, () async {
       try {
         final fresh = await locationStatus(session);
@@ -951,6 +976,7 @@ class RainApi {
           throw const ApiFailure('位置签到已结束或轮次已变化，请重新查询确认');
         }
         if (!_locationAccepted.contains(key)) {
+          if (shouldSubmit != null && !shouldSubmit()) return false;
           await _request(
             '/api/v3/lesson/location-checkin/submit',
             session: session,

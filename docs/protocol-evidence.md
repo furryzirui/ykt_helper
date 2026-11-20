@@ -66,7 +66,7 @@ identityId=<lessonInfo.identityId>&problemId=<id>&lesson_id=<lessonId>
 
 ## 位置签到
 
-`GET /api/v3/lesson/location-checkin/eligibility` 携带课堂 Bearer，返回 `signed`、`needLocationSignIn` 和 `session.centerLat/centerLng`（或完整 `lat/lng`）、地址。提交前展示并确认，使用服务端中心坐标；不是手机 GPS 测量值。
+`GET /api/v3/lesson/location-checkin/eligibility` 携带课堂 Bearer，返回 `signed`、`needLocationSignIn` 和 `session.centerLat/centerLng`（或完整 `lat/lng`）、地址。手动提交前逐次展示并确认；1.1 增加独立的自动位置签到开关，开启时确认后后续各轮自动提交。使用服务端中心坐标，不是手机 GPS 测量值。明确 `signed=true` 可作为已签到证据，即使普通课堂报告尚未同步；新一轮签到会使旧轮证据失效。
 
 `POST /api/v3/lesson/location-checkin/submit`：`{lat,lng,lessonId,source:54,address}`。提交前再次查询并比对签到轮次与完整坐标，提交后查询 `signed=true` 才确认成功。`locationcheckinext/locationcheckinend/lessonfinished` 应调用 `locationRoundChanged` 使旧确认失效。已接受但尚待确认的相同轮次不重复 POST。
 

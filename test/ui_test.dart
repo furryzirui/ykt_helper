@@ -333,6 +333,8 @@ void main() {
 
   testWidgets('课堂签到状态独立显示且不从课堂凭证或位置签到推断', (tester) async {
     final controller = _UiController(), live = _classroom();
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     live.location = const LocationCheckin(signed: true, available: true);
     Widget view() => MaterialApp(
       home: LivePage(controller: controller, classroom: live),
@@ -358,11 +360,15 @@ void main() {
     final controller = _UiController(), live = _classroom();
     controller.account = const Account(id: 'user', name: '测试');
     controller.classrooms[live.lesson.id] = live;
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     const question = Question(
       id: 'draft-choice',
       body: '选择题',
       type: 1,
       options: {'A': '选项甲', 'B': '选项乙'},
+      dt: 1,
+      limit: -1,
     );
     live.answersKnown = true;
     live.activeProblemIds.add(question.id);
@@ -410,6 +416,8 @@ void main() {
     final controller = _UiController(), live = _classroom();
     controller.account = const Account(id: 'user', name: '测试');
     controller.classrooms[live.lesson.id] = live;
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     const blank = Question(
       id: 'blank-draft',
       body: '填空题',
@@ -455,13 +463,13 @@ void main() {
     await tester.pumpWidget(view());
     expect(find.text('手动改写第一空'), findsOneWidget);
     expect(live.draftAnswers[blank.id], ['手动改写第一空', '第二空']);
-    expect(live.autoStates[blank.id], '答案已修改，待确认提交');
+    expect(find.text('答案已填充，等待开始作答'), findsNWidgets(2));
     await tester.ensureVisible(find.byType(TextField).last);
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, '手动改写主观回答');
     await tester.pumpWidget(view());
     expect(live.draftAnswers[essay.id]['content'], '手动改写主观回答');
-    expect(live.autoStates[essay.id], '答案已修改，待确认提交');
+    expect(find.text('答案已填充，等待开始作答'), findsNWidgets(2));
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });
@@ -797,6 +805,8 @@ void main() {
 
   testWidgets('远端状态未知时保留警告并允许手动提交', (tester) async {
     final controller = _UiController(), live = _classroom();
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     final question = Question(
       id: 'question',
       body: '<p>题干</p>',
@@ -831,6 +841,8 @@ void main() {
   for (final originalType in [1, 2, 3, 6]) {
     testWidgets('两个选项的原类型$originalType题显示判断并按单选提交', (tester) async {
       final controller = _UiController(), live = _classroom();
+      controller.account = const Account(id: 'user', name: '测试');
+      controller.classrooms[live.lesson.id] = live;
       final question = Question(
         id: 'judgement',
         body: '两个选项的题',
@@ -889,6 +901,8 @@ void main() {
 
   testWidgets('同题选项缩减为判断题时清除失效选择并阻止提交旧选项', (tester) async {
     final controller = _UiController(), live = _classroom();
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     Question question(Map<String, String> options) => Question(
       id: 'changing-options',
@@ -951,6 +965,8 @@ void main() {
 
   testWidgets('投票允许选择两项并在达到上限后保留取消能力', (tester) async {
     final controller = _UiController(), live = _classroom();
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     final question = Question(
       id: 'poll',
       body: '投票题',
@@ -1012,6 +1028,8 @@ void main() {
 
   testWidgets('位置签到确认前不会提交坐标', (tester) async {
     final controller = _UiController(), live = _classroom();
+    controller.account = const Account(id: 'user', name: '测试');
+    controller.classrooms[live.lesson.id] = live;
     await tester.pumpWidget(
       MaterialApp(
         home: LivePage(controller: controller, classroom: live),

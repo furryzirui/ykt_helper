@@ -338,9 +338,8 @@ void main() {
         expect(api.submissions, 0);
 
         ai.answer.complete('A');
-        await eventually(
-          () => live.autoStates[question.id]?.contains('取消') ?? false,
-        );
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.answerStatus(live, question), '作答已结束');
         expect(api.submissions, 0);
         expect(live.answers.containsKey(question.id), isFalse);
       } finally {

@@ -128,6 +128,21 @@ class DeferredAi extends AiAnswerService {
   }
 }
 
+class BatchAi extends AiAnswerService {
+  final requests = <String, List<Completer<String>>>{};
+  @override
+  Future<String> generate({
+    required AppSettings settings,
+    required Question question,
+    required List<Slide> slides,
+    required Future<Uint8List> Function(String url) loadImage,
+  }) {
+    final result = Completer<String>();
+    requests.putIfAbsent(question.id, () => []).add(result);
+    return result.future;
+  }
+}
+
 class TimingConnection extends LiveConnection {
   final List<String> requested = [];
   TimingConnection(super.session) : super(onEvent: (_) {}, onStatus: (_) {});
@@ -142,6 +157,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late FakeRain api;
   late AppController controller;
+  final disposedControllers = <AppController>{};
+  void disposeController() {
+    if (disposedControllers.add(controller)) controller.dispose();
+  }
+
   const lesson = Lesson(
     id: 'l',
     courseId: 'c',
@@ -195,10 +215,11 @@ void main() {
     );
     controller.account = const Account(id: 'u', name: '测试');
   });
-  tearDown(() => controller.dispose());
+  tearDown(() => disposeController());
   void resetForWidgetTest() {
+    addTearDown(disposeController);
     // Create Future chains inside the widget test's fake async zone.
-    controller.dispose();
+    disposeController();
     controller = AppController(
       api: api,
       store: MemoryStore(),
@@ -208,6 +229,339 @@ void main() {
       connectSockets: false,
     )..account = const Account(id: 'u', name: '测试');
   }
+
+  void useAiClock(WidgetTester tester, BatchAi ai) {
+    addTearDown(disposeController);
+    disposeController();
+    controller =
+        AppController(
+            api: api,
+            ai: ai,
+            store: MemoryStore(),
+            background: NoBackground(),
+            autostart: const NoAutostart(),
+            startTimers: false,
+            connectSockets: false,
+            now: tester.binding.clock.now,
+          )
+          ..account = const Account(id: 'u', name: '测试')
+          ..settings = AppSettings(
+            autoAnswer: true,
+            autoSubmit: true,
+            answerMode: AnswerMode.ai,
+          );
+  }
+
+  testWidgets(
+    'loaded questions start AI independently before timing or answer sync',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      api.decks['p'] = const Presentation(
+        id: 'p',
+        title: '课件',
+        slides: [
+          Slide(id: 's1', index: 0, imageUrl: '', question: question),
+          Slide(
+            id: 's2',
+            index: 1,
+            imageUrl: '',
+            question: Question(
+              id: 'q2',
+              body: '另一道题',
+              type: 1,
+              options: {'A': '甲', 'B': '乙', 'C': '丙'},
+            ),
+          ),
+        ],
+      );
+      api.pendingAnswers = Completer();
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await tester.pump();
+      expect(ai.requests.keys, containsAll(['q', 'q2']));
+      expect(live.answersKnown, isFalse);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('C');
+      await tester.pump();
+      expect(live.draftAnswers['q'], ['A']);
+      expect(live.draftAnswers['q2'], ['C']);
+      expect(controller.canEditAnswer(live, live.questions['q']!), isTrue);
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
+      await expectLater(
+        controller.submitAnswer(live, live.questions['q']!, ['A']),
+        throwsA(isA<ApiFailure>()),
+      );
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      await controller.processEvent(live, hello());
+      expect(ai.requests['q'], hasLength(1));
+      expect(ai.requests['q2'], hasLength(1));
+      api.pendingAnswers!.complete({});
+      api.pendingAnswers = null;
+      await controller.syncAnswers(live);
+      await controller.processEvent(
+        live,
+        unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
+      );
+      await tester.pump();
+      expect(live.draftAnswers['q'], ['B']);
+      await tester.pump(const Duration(seconds: 29));
+      expect(api.submissions, 0);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submittedAnswers, [
+        ['B'],
+      ]);
+      expect(controller.answerStatus(live, live.questions['q']!), '答案已提交');
+    },
+  );
+
+  testWidgets('slow AI uses the remaining delay from answerability', (
+    tester,
+  ) async {
+    final ai = BatchAi();
+    useAiClock(tester, ai);
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.syncAnswers(live);
+    await controller.processEvent(
+      live,
+      unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
+    );
+    await tester.pump(const Duration(seconds: 20));
+    ai.requests['q']!.single.complete('A');
+    await tester.pump();
+    expect(live.autoStates['q'], '答案已填充，10 秒后自动提交');
+    await tester.pump(const Duration(seconds: 9));
+    expect(api.submissions, 0);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.submissions, 1);
+  });
+
+  testWidgets(
+    'explicit future timing cannot submit early and opens without another event',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      controller.settings.autoSubmitDelaySeconds = 5;
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      ai.requests['q']!.single.complete('A');
+      await tester.pump();
+      await controller.syncAnswers(live);
+      final startsAt = tester.binding.clock.now().add(
+        const Duration(seconds: 10),
+      );
+      await controller.processEvent(
+        live,
+        unlock(dt: startsAt.millisecondsSinceEpoch),
+      );
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
+      expect(controller.canEditAnswer(live, live.questions['q']!), isTrue);
+      await tester.pump(const Duration(seconds: 9));
+      expect(api.submissions, 0);
+      await tester.pump(const Duration(seconds: 1));
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isTrue);
+      await tester.pump(const Duration(seconds: 4));
+      expect(api.submissions, 0);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submissions, 1);
+    },
+  );
+
+  test(
+    'missing launch limit stays unconfirmed until explicit server timing arrives',
+    () async {
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      final dt = DateTime.now().millisecondsSinceEpoch;
+      await controller.processEvent(live, {
+        'op': 'unlockproblem',
+        'problem': {'prob': 'q', 'dt': dt},
+      });
+      expect(controller.answerStatus(live, live.questions['q']!), '正在确认作答时间');
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
+      expect(controller.canEditAnswer(live, live.questions['q']!), isTrue);
+      await controller.processEvent(live, {
+        'op': 'probleminfo',
+        'problemid': 'q',
+        'dt': dt,
+        'limit': 60,
+      });
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isTrue);
+      expect(controller.answerStatus(live, live.questions['q']!), '可以作答');
+      await controller.processEvent(live, {
+        'op': 'probleminfo',
+        'problemid': 'q',
+        'dt': dt,
+        'limit': 0,
+      });
+      expect(controller.answerStatus(live, live.questions['q']!), '作答已结束');
+    },
+  );
+
+  testWidgets(
+    'editing after launch submits latest draft at the original deadline',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      ai.requests['q']!.single.complete('A');
+      await tester.pump();
+      await controller.syncAnswers(live);
+      await controller.processEvent(
+        live,
+        unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
+      );
+      await tester.pump(const Duration(seconds: 20));
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      await tester.pump(const Duration(seconds: 9));
+      expect(api.submissions, 0);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submittedAnswers, [
+        ['B'],
+      ]);
+    },
+  );
+
+  testWidgets(
+    'cleared draft never submits and completing it uses the elapsed delay',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      controller.settings.autoSubmitDelaySeconds = 5;
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      ai.requests['q']!.single.complete('A');
+      await tester.pump();
+      await controller.syncAnswers(live);
+      await controller.processEvent(
+        live,
+        unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
+      );
+      controller.updateAnswerDraft(live, live.questions['q']!, <String>[]);
+      expect(live.autoStates['q'], contains('请选择答案'));
+      await tester.pump(const Duration(seconds: 8));
+      expect(api.submissions, 0);
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      expect(live.autoStates['q'], '答案已填充，0 秒后自动提交');
+      await tester.pump(Duration.zero);
+      await tester.pump();
+      expect(api.submittedAnswers, [
+        ['B'],
+      ]);
+    },
+  );
+
+  testWidgets(
+    'refresh preserves authoritative timing and cached AI until content changes',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      controller.settings.autoSubmit = false;
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      ai.requests['q']!.single.complete('A');
+      await tester.pump();
+      await controller.syncAnswers(live);
+      final localTime = tester.binding.clock.now().millisecondsSinceEpoch;
+      await controller.processEvent(live, {
+        'op': 'unlockproblem',
+        'problem': {
+          'prob': 'q',
+          'dt': localTime + 5000,
+          'now': localTime + 5000,
+          'limit': 60,
+        },
+      });
+      final authoritative = live.questions['q']!;
+      await controller.refreshClassroom(live);
+      await tester.pump();
+      expect(identical(live.questions['q'], authoritative), isTrue);
+      expect(ai.requests['q'], hasLength(1));
+      await tester.pump(const Duration(seconds: 61));
+      expect(live.activeProblemIds, isNot(contains('q')));
+      expect(live.autoStates['q'], '作答已结束');
+
+      // An actual changed PPT question invalidates a cached draft even if its
+      // protocol ID is unchanged; old provider work cannot overwrite the new one.
+      await controller.processEvent(
+        live,
+        unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
+      );
+      api.decks['p'] = const Presentation(
+        id: 'p',
+        title: '更新',
+        slides: [
+          Slide(
+            id: 's1',
+            index: 0,
+            imageUrl: '',
+            question: Question(
+              id: 'q',
+              body: '改过的题干',
+              type: 1,
+              options: {'A': '甲', 'B': '乙', 'C': '丙'},
+            ),
+          ),
+        ],
+      );
+      await controller.refreshClassroom(live);
+      expect(ai.requests['q'], hasLength(3));
+      ai.requests['q']![1].complete('A');
+      ai.requests['q']![2].complete('C');
+      await tester.pump();
+      expect(live.draftAnswers['q'], ['C']);
+    },
+  );
+
+  test(
+    'terminal status overrides stale automation labels with no queued job',
+    () async {
+      var clock = DateTime.now();
+      disposeController();
+      controller = AppController(
+        api: api,
+        store: MemoryStore(),
+        background: NoBackground(),
+        autostart: const NoAutostart(),
+        startTimers: false,
+        connectSockets: false,
+        now: () => clock,
+      )..account = const Account(id: 'u', name: '测试');
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      await controller.processEvent(
+        live,
+        unlock(dt: clock.millisecondsSinceEpoch),
+      );
+      live.autoStates['q'] = '答案已填充，待确认提交';
+      clock = clock.add(const Duration(seconds: 61));
+      expect(controller.answerStatus(live, live.questions['q']!), '作答已结束');
+      expect(controller.canEditAnswer(live, live.questions['q']!), isFalse);
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
+      api.remote = {
+        'q': const AnswerRecord(
+          problemId: 'q',
+          answer: ['B'],
+          source: AnswerSource.server,
+        ),
+      };
+      await Future<void>.delayed(Duration.zero);
+      await controller.syncAnswers(live);
+      expect(live.autoStates['q'], '答案已提交');
+      await controller.processEvent(live, {
+        'op': 'problemfinished',
+        'prob': 'q',
+      });
+      expect(controller.answerStatus(live, live.questions['q']!), '答案已提交');
+    },
+  );
 
   test(
     'a presentation fetched before suspension cannot restore stale state',
@@ -455,7 +809,7 @@ void main() {
 
   test('AI answers also remain drafts when auto submit is off', () async {
     final ai = DeferredAi();
-    controller.dispose();
+    disposeController();
     controller =
         AppController(
             api: api,
@@ -484,7 +838,7 @@ void main() {
   });
   test('late AI cannot fill a closed question or changed settings', () async {
     final ai = DeferredAi();
-    controller.dispose();
+    disposeController();
     controller =
         AppController(
             api: api,
@@ -593,7 +947,7 @@ void main() {
   test(
     'timeline questions wait for server timing before becoming answerable',
     () async {
-      controller.dispose();
+      disposeController();
       controller = AppController(
         api: api,
         store: MemoryStore(),
@@ -926,22 +1280,20 @@ void main() {
     expect(live.draftAnswers, isEmpty);
   });
 
-  testWidgets('edits preserve the draft and cancel the old automatic answer', (
-    tester,
-  ) async {
-    final live = await prepareDelayed(tester);
-    controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
-    await tester.pump(const Duration(seconds: 31));
-    expect(api.submissions, 0);
-    expect(live.draftAnswers['q'], ['B']);
-    expect(live.autoStates['q'], '答案已修改，待确认提交');
-    await controller.syncAnswers(live);
-    expect(live.draftAnswers['q'], ['B']);
-    await controller.submitAnswer(live, live.questions['q']!, ['B']);
-    expect(api.submittedAnswers, [
-      ['B'],
-    ]);
-  });
+  testWidgets(
+    'edits replace the queued automatic answer with the latest draft',
+    (tester) async {
+      final live = await prepareDelayed(tester);
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      await tester.pump(const Duration(seconds: 31));
+      expect(api.submissions, 1);
+      expect(live.answers['q']!.answer, ['B']);
+      expect(live.autoStates['q'], '答案已提交');
+      expect(api.submittedAnswers, [
+        ['B'],
+      ]);
+    },
+  );
 
   testWidgets('manual submission immediately cancels the timer', (
     tester,
@@ -986,7 +1338,7 @@ void main() {
       await tester.pump();
       expect(api.submissions, 0);
       expect(live.draftAnswers['q'], ['B']);
-      expect(live.autoStates['q'], '答案已修改，待确认提交');
+      expect(live.autoStates['q'], contains('秒后自动提交'));
     },
   );
 
@@ -994,7 +1346,7 @@ void main() {
     tester,
   ) async {
     resetForWidgetTest();
-    controller.dispose();
+    disposeController();
     final ai = DeferredAi();
     controller =
         AppController(
@@ -1030,7 +1382,7 @@ void main() {
     tester,
   ) async {
     resetForWidgetTest();
-    controller.dispose();
+    disposeController();
     final ai = DeferredAi();
     controller =
         AppController(
@@ -1058,16 +1410,16 @@ void main() {
     ai.result.complete('A');
     await tester.pump();
     await tester.pump(const Duration(seconds: 31));
-    expect(api.submissions, 0);
-    expect(live.draftAnswers['q'], ['B']);
-    expect(live.autoStates['q'], '答案已修改，待确认提交');
+    expect(api.submissions, 1);
+    expect(live.answers['q']!.answer, ['B']);
+    expect(live.autoStates['q'], '答案已提交');
   });
 
   testWidgets(
     'a late AI failure cannot replace a manually edited draft state',
     (tester) async {
       resetForWidgetTest();
-      controller.dispose();
+      disposeController();
       final ai = DeferredAi();
       controller =
           AppController(
@@ -1095,9 +1447,9 @@ void main() {
       ai.result.completeError(const ApiFailure('late AI failure'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 31));
-      expect(api.submissions, 0);
-      expect(live.draftAnswers['q'], ['B']);
-      expect(live.autoStates['q'], '答案已修改，待确认提交');
+      expect(api.submissions, 1);
+      expect(live.answers['q']!.answer, ['B']);
+      expect(live.autoStates['q'], '答案已提交');
     },
   );
 
@@ -1195,7 +1547,7 @@ void main() {
   test(
     'AI uses question page even after browsing away; disabling cancels submit',
     () async {
-      controller.dispose();
+      disposeController();
       final ai = DeferredAi();
       controller = AppController(
         api: api,

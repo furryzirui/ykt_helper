@@ -282,7 +282,7 @@ enum BackgroundServiceMode { native, silentAudio, pictureInPicture, location }
 
 const serviceTimeoutOptions = [0, 10, 120, 1440];
 
-const defaultAiPrompt = '请使用最简洁的回答完成这道题：{question}';
+const defaultAiPrompt = '请使用最简洁的回答完成这道题，不要使用markdown：{question}';
 const defaultSlidePrompt = '可以参考课程课件进行完成';
 const defaultFixedSingleAnswer = 'A';
 const defaultFixedMultipleAnswer = 'AB';
@@ -293,7 +293,12 @@ class AppSettings {
   /// Lets an enabled automation start the service when needed. The direct
   /// system-service switch is a process-local control in AppController and is
   /// deliberately not persisted.
-  bool autoStartService, appAutoStart, autoEnter, autoAnswer, autoSubmit;
+  bool autoStartService,
+      appAutoStart,
+      autoEnter,
+      autoLocationCheckin,
+      autoAnswer,
+      autoSubmit;
   int autoSubmitDelaySeconds;
   int serviceTimeoutMinutes;
   BackgroundServiceMode backgroundMode;
@@ -309,6 +314,7 @@ class AppSettings {
     this.autoStartService = false,
     this.appAutoStart = false,
     this.autoEnter = false,
+    this.autoLocationCheckin = false,
     this.autoAnswer = false,
     this.autoSubmit = false,
     this.autoSubmitDelaySeconds = 30,
@@ -401,6 +407,7 @@ class AppSettings {
     autoStartService: truth(json['autoStartService']),
     appAutoStart: truth(json['appAutoStart']),
     autoEnter: truth(json['autoEnter']),
+    autoLocationCheckin: truth(json['autoLocationCheckin']),
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
     autoSubmitDelaySeconds: integer(json['autoSubmitDelaySeconds'], 30),
@@ -433,7 +440,9 @@ class AppSettings {
     apiKey: str(json['apiKey']),
     model: str(json['model']),
     customPrompt: json.containsKey('customPrompt')
-        ? str(json['customPrompt'])
+        ? json['customPrompt'] == '请使用最简洁的回答完成这道题：{question}'
+              ? defaultAiPrompt
+              : str(json['customPrompt'])
         : defaultAiPrompt,
     slidePrompt: json.containsKey('slidePrompt')
         ? str(json['slidePrompt'])
@@ -447,6 +456,7 @@ class AppSettings {
     'autoStartService': autoStartService,
     'appAutoStart': appAutoStart,
     'autoEnter': autoEnter,
+    'autoLocationCheckin': autoLocationCheckin,
     'autoAnswer': autoAnswer,
     'autoSubmit': autoSubmit,
     'autoSubmitDelaySeconds': autoSubmitDelaySeconds,

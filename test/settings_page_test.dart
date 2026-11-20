@@ -191,6 +191,58 @@ Future<void> _type(WidgetTester tester, String key, String text) async {
 }
 
 void main() {
+  testWidgets('位置自动签到独立开关需确认，取消不保存，关闭父项会关闭子项', (tester) async {
+    final controller = _Controller(_Ai());
+    await _show(tester, controller);
+    final position = _setting('auto-location-checkin');
+    expect(tester.widget<SwitchListTile>(position).onChanged, isNull);
+    expect(find.text('请先开启自动签到'), findsOneWidget);
+    await tester.tap(_setting('auto-enter'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(position).onChanged, isNotNull);
+    await tester.tap(position);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('并非手机实测位置'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoLocationCheckin, false);
+    await tester.tap(position);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoLocationCheckin, true);
+    await tester.tap(_setting('auto-enter'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoLocationCheckin, false);
+    expect(tester.widget<SwitchListTile>(position).onChanged, isNull);
+    await _close(tester, controller);
+  });
+
+  testWidgets('位置偏好保存未完成时关闭自动签到不会被旧保存覆盖', (tester) async {
+    final pending = Completer<void>();
+    final controller = _Controller(_Ai())
+      ..settings = AppSettings(autoEnter: true)
+      ..pendingSave = pending;
+    await _show(tester, controller);
+    await tester.tap(_setting('auto-location-checkin'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+    await tester.pump();
+    expect(controller.snapshots.single.autoLocationCheckin, true);
+    await tester.tap(_setting('auto-enter'));
+    await tester.pump();
+    expect(
+      tester.widget<SwitchListTile>(_setting('auto-location-checkin')).value,
+      false,
+    );
+    pending.complete();
+    controller.pendingSave = null;
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoEnter, false);
+    expect(controller.settings.autoLocationCheckin, false);
+    await _close(tester, controller);
+  });
+
   testWidgets('右上角只显示保存结果，连续保存期间无加载图标或结果闪空', (tester) async {
     final controller = _Controller(_Ai())
       ..settings = AppSettings(autoAnswer: true);

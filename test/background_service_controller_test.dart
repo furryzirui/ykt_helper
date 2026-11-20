@@ -1063,20 +1063,29 @@ void main() {
           }),
         );
         _settle(async, h.controller.syncAnswers(live));
+        expect(live.draftAnswers['question'], ['A']);
+        final foregroundDraft = Map<String, dynamic>.from(live.draftAnswers);
         h.controller.setForeground(false);
+        live.questions['background-question'] = const Question(
+          id: 'background-question',
+          body: '后台收到的新题',
+          type: 1,
+          options: {'A': '甲', 'B': '乙', 'C': '丙'},
+        );
         _settle(
           async,
           h.controller.processEvent(live, {
             'op': 'unlockproblem',
             'problem': {
-              'prob': 'question',
+              'prob': 'background-question',
               'pres': 'deck',
-              'dt': DateTime.now().millisecondsSinceEpoch,
+              'dt': h.controller.now().millisecondsSinceEpoch,
               'limit': -1,
             },
           }),
         );
-        expect(live.draftAnswers, isEmpty);
+        expect(live.draftAnswers, foregroundDraft);
+        expect(live.draftAnswers.containsKey('background-question'), isFalse);
         expect(h.api.submissions, 0);
         h.dispose(async);
       });
@@ -1107,7 +1116,7 @@ void main() {
             'problem': {
               'prob': 'question',
               'pres': 'deck',
-              'dt': DateTime.now().millisecondsSinceEpoch,
+              'dt': h.controller.now().millisecondsSinceEpoch,
               'limit': -1,
             },
           }),

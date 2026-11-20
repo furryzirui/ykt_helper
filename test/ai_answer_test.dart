@@ -127,7 +127,7 @@ void main() {
   test('exact user prompt and optional slide sentence', () {
     expect(
       AiAnswerService.prompt(q, false),
-      '请使用最简洁的回答完成这道题：题目\nA. 甲\nB. 乙\nC. 丙',
+      '请使用最简洁的回答完成这道题，不要使用markdown：题目\nA. 甲\nB. 乙\nC. 丙',
     );
     expect(AiAnswerService.prompt(q, true).endsWith('可以参考课程课件进行完成'), true);
   });

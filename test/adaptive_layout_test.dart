@@ -327,7 +327,8 @@ void main() {
           );
           final slideRect = tester.getRect(find.byType(SlideViewport));
           final cardRect = tester.getRect(find.byType(QuestionCard).first);
-          expect(cardRect.left, greaterThan(slideRect.right));
+          expect(cardRect.top, greaterThan(slideRect.bottom));
+          expect(cardRect.left, greaterThanOrEqualTo(slideRect.left - 4));
           expect(slideRect.height, greaterThan(80));
           await tester.tap(find.byTooltip('下一页'));
           await tester.pumpAndSettle();

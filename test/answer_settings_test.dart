@@ -3,6 +3,24 @@ import 'package:ykt_helper/domain/models.dart';
 
 void main() {
   test(
+    'the updated default prompt migrates without replacing custom prompts',
+    () {
+      expect(defaultAiPrompt, '请使用最简洁的回答完成这道题，不要使用markdown：{question}');
+      expect(
+        AppSettings.fromJson({
+          'customPrompt': '请使用最简洁的回答完成这道题：{question}',
+        }).customPrompt,
+        defaultAiPrompt,
+      );
+      for (final prompt in ['', '只输出答案：{question}']) {
+        expect(
+          AppSettings.fromJson({'customPrompt': prompt}).customPrompt,
+          prompt,
+        );
+      }
+    },
+  );
+  test(
     'removed test mode falls back to silent audio and requires fresh consent',
     () {
       final settings = AppSettings.fromJson({

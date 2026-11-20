@@ -282,6 +282,7 @@ class _AutomationPageState extends State<AutomationPage>
           final committed = widget.controller.settings;
           _draft!
             ..autoEnter = committed.autoEnter
+            ..autoLocationCheckin = committed.autoLocationCheckin
             ..autoAnswer = committed.autoAnswer
             ..autoSubmit = committed.autoSubmit
             ..autoStartService = committed.autoStartService
@@ -503,6 +504,33 @@ class _AutomationPageState extends State<AutomationPage>
       if (value && _ios) settings.iosBackgroundConsentMode = mode.name;
       if (!value) settings.appAutoStart = false;
     });
+  }
+
+  Future<void> _setAutoLocationCheckin(bool value) async {
+    if (value) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('确认自动位置签到'),
+          content: const Text(
+            '开启后将使用服务器返回的签到中心坐标自动完成每轮位置签到，并非手机实测位置。后续自动签到不再逐次确认；手动位置签到仍需确认。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('确认开启'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    if (!mounted || _disabled || !_draft!.autoEnter) return;
+    _edit(() => _draft!.autoLocationCheckin = value);
   }
 
   Future<void> _setBackgroundMode(BackgroundServiceMode? mode) async {
@@ -897,6 +925,9 @@ class _AutomationPageState extends State<AutomationPage>
                             : (value) {
                                 _edit(() {
                                   settings.autoEnter = value;
+                                  if (!value) {
+                                    settings.autoLocationCheckin = false;
+                                  }
                                   if (!settings.autoEnter &&
                                       !settings.autoAnswer) {
                                     settings.autoStartService = false;
@@ -904,6 +935,22 @@ class _AutomationPageState extends State<AutomationPage>
                                   }
                                 });
                               },
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const ValueKey('auto-location-checkin'),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                        secondary: _settingIcon(Icons.location_on_outlined),
+                        title: const Text('位置签到'),
+                        subtitle: SettingDescription(
+                          settings.autoEnter
+                              ? '使用服务器签到中心自动完成每轮位置签到'
+                              : '请先开启自动签到',
+                        ),
+                        value: settings.autoLocationCheckin,
+                        onChanged: _disabled || !settings.autoEnter
+                            ? null
+                            : _setAutoLocationCheckin,
                       ),
                       const Divider(height: 1),
                       SwitchListTile(

@@ -13,7 +13,8 @@ import 'widgets.dart';
 
 class CoursesPage extends StatelessWidget {
   final AppController controller;
-  const CoursesPage({super.key, required this.controller});
+  final Future<void> Function(domain.Lesson)? onOpenLive;
+  const CoursesPage({super.key, required this.controller, this.onOpenLive});
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
@@ -54,8 +55,11 @@ class CoursesPage extends StatelessWidget {
               : const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) =>
-                  CourseLessonsPage(controller: controller, course: course),
+              builder: (_) => CourseLessonsPage(
+                controller: controller,
+                course: course,
+                onOpenLive: onOpenLive,
+              ),
             ),
           ),
         ),
@@ -99,10 +103,12 @@ class CoursesPage extends StatelessWidget {
 class CourseLessonsPage extends StatefulWidget {
   final AppController controller;
   final domain.Course course;
+  final Future<void> Function(domain.Lesson)? onOpenLive;
   const CourseLessonsPage({
     super.key,
     required this.controller,
     required this.course,
+    this.onOpenLive,
   });
   @override
   State<CourseLessonsPage> createState() => _CourseLessonsPageState();
@@ -119,6 +125,7 @@ class _CourseLessonsPageState extends State<CourseLessonsPage> {
   String? _error;
   int _page = 0;
   domain.Lesson? _selectedLesson;
+  String? _enteringLesson;
   @override
   void initState() {
     super.initState();
@@ -262,6 +269,38 @@ class _CourseLessonsPageState extends State<CourseLessonsPage> {
     }
   }
 
+  Future<void> _openLive(domain.Lesson lesson) async {
+    if (_enteringLesson != null ||
+        _accountChanged ||
+        !identical(_account, widget.controller.account)) {
+      return;
+    }
+    final account = widget.controller.account;
+    setState(() => _enteringLesson = lesson.id);
+    try {
+      if (widget.onOpenLive != null) {
+        await widget.onOpenLive!(lesson);
+      } else {
+        final live = await widget.controller.enter(lesson);
+        if (!mounted || !identical(account, widget.controller.account)) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) =>
+                LivePage(controller: widget.controller, classroom: live),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _enteringLesson = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -286,6 +325,7 @@ class _CourseLessonsPageState extends State<CourseLessonsPage> {
                             controller: widget.controller,
                             lesson: _selectedLesson!,
                             embedded: true,
+                            onOpenLive: widget.onOpenLive,
                           ),
                   ),
                 ],
@@ -337,12 +377,21 @@ class _CourseLessonsPageState extends State<CourseLessonsPage> {
                   ],
                 ),
               ),
-              trailing: lesson.oldVersion
+              trailing: _enteringLesson == lesson.id
+                  ? const SizedBox.square(
+                      dimension: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : lesson.oldVersion
                   ? const Chip(label: Text('旧版课堂'))
                   : lesson.live
                   ? const Chip(label: Text('上课中'))
                   : const Icon(Icons.chevron_right),
               onTap: () {
+                if (lesson.live) {
+                  _openLive(lesson);
+                  return;
+                }
                 if (lesson.oldVersion) {
                   showDialog<void>(
                     context: context,
@@ -367,6 +416,7 @@ class _CourseLessonsPageState extends State<CourseLessonsPage> {
                       builder: (_) => LessonDetailPage(
                         controller: widget.controller,
                         lesson: lesson,
+                        onOpenLive: widget.onOpenLive,
                       ),
                     ),
                   );
@@ -399,11 +449,13 @@ class LessonDetailPage extends StatefulWidget {
   final AppController controller;
   final domain.Lesson lesson;
   final bool embedded;
+  final Future<void> Function(domain.Lesson)? onOpenLive;
   const LessonDetailPage({
     super.key,
     required this.controller,
     required this.lesson,
     this.embedded = false,
+    this.onOpenLive,
   });
   @override
   State<LessonDetailPage> createState() => _LessonDetailPageState();
@@ -413,11 +465,43 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
   late Future<domain.LessonDetail> _detail;
   bool _entering = false, _downloading = false;
   int _reviewIndex = 0;
+  bool _liveRedirected = false;
+  String? _liveRedirectError;
+  late final domain.Account? _account;
 
   @override
   void initState() {
     super.initState();
+    _account = widget.controller.account;
     _detail = widget.controller.loadDetail(widget.lesson);
+  }
+
+  void _redirectLive(domain.Lesson lesson) {
+    if (_liveRedirected || !identical(_account, widget.controller.account)) {
+      return;
+    }
+    _liveRedirected = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !identical(_account, widget.controller.account)) return;
+      try {
+        if (widget.onOpenLive != null) {
+          await widget.onOpenLive!(lesson);
+        } else {
+          final live = await widget.controller.enter(lesson);
+          if (!mounted || !identical(_account, widget.controller.account)) {
+            return;
+          }
+          await Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) =>
+                  LivePage(controller: widget.controller, classroom: live),
+            ),
+          );
+        }
+      } catch (error) {
+        if (mounted) setState(() => _liveRedirectError = error.toString());
+      }
+    });
   }
 
   Future<void> _reload() async {
@@ -507,10 +591,11 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
   }
 
   Future<void> _enter() async {
+    if (!identical(_account, widget.controller.account)) return;
     setState(() => _entering = true);
     try {
       final live = await widget.controller.enter(widget.lesson);
-      if (mounted) {
+      if (mounted && identical(_account, widget.controller.account)) {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) =>
@@ -712,6 +797,7 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
           ),
         );
         final detail = snapshot.data;
+        if (detail?.lesson.live == true) _redirectLive(detail!.lesson);
         final available =
             snapshot.connectionState == ConnectionState.done &&
             !snapshot.hasError &&
@@ -790,7 +876,21 @@ class _LessonDetailPageState extends State<LessonDetailPage> {
                 ),
             ],
           ),
-          body: snapshot.hasError
+          body: !identical(_account, widget.controller.account)
+              ? const ContentMessage('账号已变更，请返回课程列表')
+              : _liveRedirectError != null
+              ? ContentMessage(
+                  _liveRedirectError!,
+                  retry: () {
+                    setState(() {
+                      _liveRedirected = false;
+                      _liveRedirectError = null;
+                    });
+                  },
+                )
+              : detail?.lesson.live == true
+              ? const Center(child: CircularProgressIndicator())
+              : snapshot.hasError
               ? ContentMessage(snapshot.error.toString(), retry: _reload)
               : detail == null
               ? const Center(child: CircularProgressIndicator())

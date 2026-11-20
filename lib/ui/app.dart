@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../app/app_controller.dart';
+import '../domain/models.dart' as domain;
 import '../services/startup_checks.dart';
 import 'course_pages.dart';
 import 'live_page.dart';
@@ -190,6 +191,20 @@ class _HomeState extends State<_Home> {
   bool _scanning = false;
   static const _labels = ['课程', '动态', '设置'];
 
+  Future<void> _openLiveLesson(domain.Lesson lesson) async {
+    final account = widget.controller.account;
+    final classroom = await widget.controller.enter(lesson);
+    if (!mounted || !identical(account, widget.controller.account)) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    setState(() => _index = 1);
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            LivePage(controller: widget.controller, classroom: classroom),
+      ),
+    );
+  }
+
   Future<void> _scan() async {
     if (_scanning || widget.controller.account == null) return;
     final account = widget.controller.account;
@@ -248,7 +263,10 @@ class _HomeState extends State<_Home> {
               child: IndexedStack(
                 index: _index,
                 children: [
-                  CoursesPage(controller: widget.controller),
+                  CoursesPage(
+                    controller: widget.controller,
+                    onOpenLive: _openLiveLesson,
+                  ),
                   LiveListPage(controller: widget.controller),
                   SettingsPage(controller: widget.controller),
                 ],
