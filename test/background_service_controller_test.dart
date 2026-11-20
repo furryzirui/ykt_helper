@@ -142,8 +142,9 @@ class _Api extends RainApi {
   @override
   Future<Map<String, AnswerRecord>> ownAnswers(
     String lessonId,
-    String presentationId,
-  ) async => {};
+    String presentationId, {
+    ClassroomSession? session,
+  }) async => {};
   @override
   Future<void> submit(
     ClassroomSession session,

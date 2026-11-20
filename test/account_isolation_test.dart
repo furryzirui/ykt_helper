@@ -102,8 +102,9 @@ class IsolationRain extends RainApi {
   @override
   Future<Map<String, AnswerRecord>> ownAnswers(
     String lessonId,
-    String presentationId,
-  ) {
+    String presentationId, {
+    ClassroomSession? session,
+  }) {
     answerRequests.add(presentationId);
     final started = answerReadsStarted[presentationId];
     if (started != null && !started.isCompleted) started.complete();

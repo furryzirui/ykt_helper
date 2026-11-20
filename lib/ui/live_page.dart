@@ -471,6 +471,8 @@ class _LivePageState extends State<LivePage> {
                     page: page + 1,
                     questionLabel: _questionFor(live, slides[page])?.typeLabel,
                     selected: page == live.slideIndex,
+                    teacherCurrent:
+                        !live.ended && page == live.teacherSlideIndex,
                     onTap: () => _selectPage(live, page),
                   ),
                 ),
@@ -541,11 +543,23 @@ class _LivePageState extends State<LivePage> {
           final page = item - 1;
           final slide = slides[page];
           final question = _questionFor(live, slide);
+          final teacherCurrent = !live.ended && page == live.teacherSlideIndex;
+          final scheme = Theme.of(context).colorScheme;
           return KeyedSubtree(
             key: _slideKeys.putIfAbsent(_slideKey(live, page), GlobalKey.new),
             child: Card(
               key: ValueKey('live-slide-${slide.id}-$page'),
               margin: const EdgeInsets.only(bottom: 12),
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: BorderSide(
+                  color: teacherCurrent
+                      ? scheme.primary
+                      : scheme.outlineVariant,
+                  width: teacherCurrent ? 3 : 1,
+                ),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -554,14 +568,34 @@ class _LivePageState extends State<LivePage> {
                     child: Row(
                       children: [
                         Expanded(
-                          child: Text(
-                            '第 ${page + 1} 页',
-                            style: Theme.of(context).textTheme.labelSmall
-                                ?.copyWith(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
+                          child: Row(
+                            children: [
+                              if (teacherCurrent) ...[
+                                Tooltip(
+                                  message: '教师当前页',
+                                  child: Icon(
+                                    Icons.sensors,
+                                    size: 16,
+                                    color: scheme.primary,
+                                  ),
                                 ),
+                                const SizedBox(width: 6),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  '第 ${page + 1} 页',
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        color: teacherCurrent
+                                            ? scheme.primary
+                                            : scheme.onSurfaceVariant,
+                                        fontWeight: teacherCurrent
+                                            ? FontWeight.w600
+                                            : null,
+                                      ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         if (slide.imageUrl.isNotEmpty)
@@ -591,13 +625,16 @@ class _LivePageState extends State<LivePage> {
                     padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
                     child: SlideImage(slide),
                   ),
-                  if (question != null)
+                  if (question != null) ...[
+                    const Divider(height: 1),
                     QuestionCard(
                       key: ValueKey(question.id),
                       controller: widget.controller,
                       classroom: live,
                       question: question,
+                      embedded: true,
                     ),
+                  ],
                 ],
               ),
             ),
@@ -679,11 +716,13 @@ class QuestionCard extends StatefulWidget {
   final AppController controller;
   final LiveClass classroom;
   final domain.Question question;
+  final bool embedded;
   const QuestionCard({
     super.key,
     required this.controller,
     required this.classroom,
     required this.question,
+    this.embedded = false,
   });
   @override
   State<QuestionCard> createState() => _QuestionCardState();
@@ -707,6 +746,7 @@ class _QuestionCardState extends State<QuestionCard> {
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_controllerChanged);
     for (var i = 0; i < widget.question.blankCount; i++) {
       _blanks.add(TextEditingController());
     }
@@ -719,6 +759,28 @@ class _QuestionCardState extends State<QuestionCard> {
   @override
   void didUpdateWidget(covariant QuestionCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller.removeListener(_controllerChanged);
+      widget.controller.addListener(_controllerChanged);
+    }
+    if (oldWidget.question.id != widget.question.id ||
+        !identical(oldWidget.classroom, widget.classroom)) {
+      _appliedDraft = null;
+      _choice.clear();
+      _text.clear();
+      _pics.clear();
+      _error = null;
+      for (final blank in _blanks) {
+        blank.dispose();
+      }
+      _blanks.clear();
+    }
+    while (_blanks.length < widget.question.blankCount) {
+      _blanks.add(TextEditingController());
+    }
+    while (_blanks.length > widget.question.blankCount) {
+      _blanks.removeLast().dispose();
+    }
     _readDraft();
     _choice.removeWhere((key) => !widget.question.options.containsKey(key));
     if (!_multipleOptionQuestion && _choice.length > 1) {
@@ -727,6 +789,11 @@ class _QuestionCardState extends State<QuestionCard> {
         ..clear()
         ..add(first);
     }
+  }
+
+  void _controllerChanged() {
+    if (!mounted) return;
+    setState(_readDraft);
   }
 
   void _readDraft() {
@@ -777,6 +844,7 @@ class _QuestionCardState extends State<QuestionCard> {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_controllerChanged);
     _timer?.cancel();
     _text.dispose();
     for (final blank in _blanks) {
@@ -868,139 +936,133 @@ class _QuestionCardState extends State<QuestionCard> {
     final active = widget.controller.canSubmitAnswer(live, question);
     final editable = widget.controller.canEditAnswer(live, question);
     final status = widget.controller.answerStatus(live, question);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    question.typeLabel,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+    final content = Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  question.typeLabel,
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-                if (_remaining != null && active) Text('剩余 $_remaining 秒'),
-              ],
-            ),
-            const SizedBox(height: 8),
-            HtmlContent(question.body),
-            if (answer != null) ...[
+              ),
+              if (_remaining != null && active) Text('剩余 $_remaining 秒'),
+            ],
+          ),
+          const SizedBox(height: 8),
+          HtmlContent(question.body),
+          if (answer != null) ...[
+            for (final option in question.options.entries)
+              HtmlContent('${option.key}. ${option.value}'),
+            OwnAnswer(answer),
+          ] else ...[
+            if (!live.answersKnown)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text('作答状态尚未确认。提交前请确认没有在其他设备作答。'),
+              ),
+            if (question.type == 3 && _multipleOptionQuestion)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text('最多选择 ${question.selectionLimit} 项'),
+              ),
+            if (_optionQuestion)
               for (final option in question.options.entries)
-                HtmlContent('${option.key}. ${option.value}'),
-              OwnAnswer(answer),
-            ] else ...[
-              if (!live.answersKnown)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text('作答状态尚未确认。提交前请确认没有在其他设备作答。'),
-                ),
-              if (question.type == 3 && _multipleOptionQuestion)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text('最多选择 ${question.selectionLimit} 项'),
-                ),
-              if (_optionQuestion)
-                for (final option in question.options.entries)
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: HtmlContent('${option.key}. ${option.value}'),
-                    value: _choice.contains(option.key),
-                    onChanged: editable && !_submitting
-                        ? (selected) {
-                            setState(() {
-                              if (!_multipleOptionQuestion) _choice.clear();
-                              if (selected == true) {
-                                if (_multipleOptionQuestion &&
-                                    question.type == 3 &&
-                                    _choice.length >= question.selectionLimit) {
-                                  _error = '最多选择 ${question.selectionLimit} 项';
-                                  return;
-                                }
-                                _choice.add(option.key);
-                              } else {
-                                _choice.remove(option.key);
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: HtmlContent('${option.key}. ${option.value}'),
+                  value: _choice.contains(option.key),
+                  onChanged: editable && !_submitting
+                      ? (selected) {
+                          setState(() {
+                            if (!_multipleOptionQuestion) _choice.clear();
+                            if (selected == true) {
+                              if (_multipleOptionQuestion &&
+                                  question.type == 3 &&
+                                  _choice.length >= question.selectionLimit) {
+                                _error = '最多选择 ${question.selectionLimit} 项';
+                                return;
                               }
-                              _error = null;
-                            });
+                              _choice.add(option.key);
+                            } else {
+                              _choice.remove(option.key);
+                            }
+                            _error = null;
+                          });
+                          _draftEdited();
+                        }
+                      : null,
+                ),
+            if (!_optionQuestion && question.type == 4)
+              for (var i = 0; i < _blanks.length; i++)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: TextField(
+                    controller: _blanks[i],
+                    enabled: editable && !_submitting,
+                    decoration: InputDecoration(labelText: '第 ${i + 1} 空'),
+                    onChanged: (_) => _draftEdited(),
+                  ),
+                ),
+            if (!_optionQuestion && question.type == 5) ...[
+              TextField(
+                controller: _text,
+                enabled: editable && !_submitting,
+                minLines: 3,
+                maxLines: 8,
+                decoration: const InputDecoration(labelText: '答案'),
+                onChanged: (_) => _draftEdited(),
+              ),
+              for (var i = 0; i < _pics.length; i++)
+                ListTile(
+                  leading: const Icon(Icons.image_outlined),
+                  title: Text('图片 ${i + 1}'),
+                  trailing: IconButton(
+                    tooltip: '移除图片',
+                    onPressed: !editable || _submitting
+                        ? null
+                        : () {
+                            setState(() => _pics.removeAt(i));
                             _draftEdited();
-                          }
-                        : null,
-                  ),
-              if (!_optionQuestion && question.type == 4)
-                for (var i = 0; i < _blanks.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: TextField(
-                      controller: _blanks[i],
-                      enabled: editable && !_submitting,
-                      decoration: InputDecoration(labelText: '第 ${i + 1} 空'),
-                      onChanged: (_) => _draftEdited(),
-                    ),
-                  ),
-              if (!_optionQuestion && question.type == 5) ...[
-                TextField(
-                  controller: _text,
-                  enabled: editable && !_submitting,
-                  minLines: 3,
-                  maxLines: 8,
-                  decoration: const InputDecoration(labelText: '答案'),
-                  onChanged: (_) => _draftEdited(),
-                ),
-                for (var i = 0; i < _pics.length; i++)
-                  ListTile(
-                    leading: const Icon(Icons.image_outlined),
-                    title: Text('图片 ${i + 1}'),
-                    trailing: IconButton(
-                      tooltip: '移除图片',
-                      onPressed: !editable || _submitting
-                          ? null
-                          : () {
-                              setState(() => _pics.removeAt(i));
-                              _draftEdited();
-                            },
-                      icon: const Icon(Icons.close),
-                    ),
-                  ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: editable && !_uploading && !_submitting
-                        ? _upload
-                        : null,
-                    icon: const Icon(Icons.add_photo_alternate_outlined),
-                    label: Text(_uploading ? '上传中…' : '添加图片'),
+                          },
+                    icon: const Icon(Icons.close),
                   ),
                 ),
-              ],
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: active && !_submitting && !_uploading
-                    ? _submit
-                    : null,
-                child: Text(_submitting ? '提交中…' : '提交答案'),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: editable && !_uploading && !_submitting
+                      ? _upload
+                      : null,
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
+                  label: Text(_uploading ? '上传中…' : '添加图片'),
+                ),
               ),
             ],
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: active && !_submitting && !_uploading ? _submit : null,
+              child: Text(_submitting ? '提交中…' : '提交答案'),
+            ),
+          ],
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(status, key: ValueKey('answer-status-${question.id}')),
+          ),
+          if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                status,
-                key: ValueKey('answer-status-${question.id}'),
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-          ],
-        ),
+        ],
       ),
     );
+    return widget.embedded ? content : Card(child: content);
   }
 }

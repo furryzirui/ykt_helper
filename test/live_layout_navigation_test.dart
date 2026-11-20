@@ -1,10 +1,18 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/app/app_controller.dart';
 import 'package:ykt_helper/data/secure_store.dart';
+import 'package:ykt_helper/data/rain_api.dart';
 import 'package:ykt_helper/domain/models.dart';
+import 'package:ykt_helper/services/app_autostart.dart';
+import 'package:ykt_helper/services/ai_answer.dart';
+import 'package:ykt_helper/services/background_runtime.dart';
 import 'package:ykt_helper/ui/app.dart';
 import 'package:ykt_helper/ui/course_pages.dart';
 import 'package:ykt_helper/ui/live_page.dart';
@@ -40,6 +48,52 @@ class _Store implements KeyValueStore {
   Future<void> write(String key, String value) async {}
   @override
   Future<void> delete(String key) async {}
+}
+
+class _Autostart extends AppAutostart {
+  @override
+  bool get supported => false;
+  @override
+  Future<void> configure({
+    required bool enabled,
+    required bool eligible,
+  }) async {}
+  @override
+  Future<void> setSuspended(bool suspended) async {}
+}
+
+class _Background extends BackgroundRuntime {
+  @override
+  bool get supported => false;
+  @override
+  Future<void> configure({
+    required BackgroundServiceMode mode,
+    DateTime? deadline,
+  }) async {}
+  @override
+  Future<bool> setEnabled(bool enabled) async => true;
+}
+
+class _EmptyApi extends RainApi {
+  @override
+  Future<List<Course>> courses() async => [];
+  @override
+  Future<List<Lesson>> liveLessons() async => [];
+}
+
+class _DelayedAi extends AiAnswerService {
+  int requests = 0;
+  final response = Completer<String>();
+  @override
+  Future<String> generate({
+    required AppSettings settings,
+    required Question question,
+    required List<Slide> slides,
+    required Future<Uint8List> Function(String url) loadImage,
+  }) {
+    requests++;
+    return response.future;
+  }
 }
 
 class _Controller extends AppController {
@@ -202,6 +256,196 @@ void main() {
     controller.dispose();
   });
 
+  for (final size in [const Size(390, 840), const Size(1280, 800)]) {
+    testWidgets('教师真实页独立于浏览页和跟随开关 $size', (tester) async {
+      final controller = _Controller(),
+          live = _live(pages: 4)
+            ..teacherSlideIndex = 2
+            ..slideIndex = 0
+            ..followTeacher = false;
+      controller.classrooms[live.lesson.id] = live;
+      await _mount(
+        tester,
+        LivePage(controller: controller, classroom: live),
+        size,
+      );
+      final mobile = size.width < 800;
+      final current = find.byKey(
+        ValueKey(mobile ? 'live-slide-s2-2' : 'live-thumbnail-2'),
+      );
+      if (mobile) {
+        await tester.scrollUntilVisible(
+          current,
+          240,
+          scrollable: find.byType(Scrollable).first,
+        );
+      }
+      expect(
+        find.descendant(of: current, matching: find.byTooltip('教师当前页')),
+        findsOneWidget,
+      );
+      if (mobile) {
+        final card = tester.widget<Card>(current);
+        expect((card.shape! as RoundedRectangleBorder).side.width, 3);
+        expect(
+          (card.shape! as RoundedRectangleBorder).side.color,
+          rainTheme(Brightness.light).colorScheme.primary,
+        );
+      } else {
+        expect(tester.widget<SlideThumbnail>(current).selected, isFalse);
+        expect(
+          tester
+              .widget<SlideThumbnail>(
+                find.byKey(const ValueKey('live-thumbnail-0')),
+              )
+              .selected,
+          isTrue,
+        );
+      }
+      await controller.processEvent(live, {
+        'op': 'slidenav',
+        'slide': {'si': 2},
+      });
+      await tester.pumpAndSettle();
+      final next = find.byKey(
+        ValueKey(mobile ? 'live-slide-s1-1' : 'live-thumbnail-1'),
+      );
+      expect(
+        find.descendant(of: current, matching: find.byTooltip('教师当前页')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: next, matching: find.byTooltip('教师当前页')),
+        findsOneWidget,
+      );
+      expect(live.slideIndex, 0);
+      expect(live.followTeacher, isFalse);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    });
+  }
+
+  testWidgets('手机PPT题卡共用一个边框，放大图片不绘制到题卡区域', (tester) async {
+    final imageData = await tester.runAsync(() async {
+      final recorder = ui.PictureRecorder();
+      Canvas(recorder).drawColor(const Color(0xffff00ff), BlendMode.src);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(320, 180);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      picture.dispose();
+      return bytes!.buffer.asUint8List();
+    });
+    final imageProvider = MemoryImage(imageData!);
+    const url = 'https://offline.invalid/card-boundary.png';
+    final cached = await tester.runAsync(() async {
+      final completer = Completer<ImageInfo>();
+      ui.decodeImageFromList(
+        imageData,
+        (image) => completer.complete(ImageInfo(image: image)),
+      );
+      return completer.future;
+    });
+    PaintingBinding.instance.imageCache.putIfAbsent(
+      const NetworkImage(url),
+      () => OneFrameImageStreamCompleter(Future.value(cached!)),
+    );
+    final controller = _Controller(), live = _live();
+    live.presentations['deck'] = const Presentation(
+      id: 'deck',
+      title: '课件',
+      slides: [Slide(id: 'colored', index: 0, imageUrl: url, question: _first)],
+    );
+    controller.classrooms[live.lesson.id] = live;
+    const boundaryKey = ValueKey('slide-card-render');
+    await _mount(
+      tester,
+      RepaintBoundary(
+        key: boundaryKey,
+        child: LivePage(controller: controller, classroom: live),
+      ),
+      const Size(390, 840),
+    );
+    // Resolve the generated bytes through a real memory image as well as the
+    // live page's pre-cached NetworkImage, without fetching the network.
+    await tester.runAsync(
+      () =>
+          precacheImage(imageProvider, tester.element(find.byType(SlideImage))),
+    );
+    await tester.ensureVisible(find.byType(SlideImage));
+    await tester.pumpAndSettle();
+    final page = find.byKey(const ValueKey('live-slide-colored-0'));
+    final question = find.descendant(
+      of: page,
+      matching: find.byType(QuestionCard),
+    );
+    expect(tester.widget<QuestionCard>(question).embedded, isTrue);
+    expect(
+      find.descendant(of: page, matching: find.byType(Card)),
+      findsNothing,
+    );
+    expect(tester.widget<Card>(page).clipBehavior, Clip.antiAlias);
+    final slideRect = tester.getRect(find.byType(SlideImage));
+    final questionRect = tester.getRect(question);
+    expect(questionRect.top, greaterThanOrEqualTo(slideRect.bottom));
+    final viewer = find.descendant(
+      of: page,
+      matching: find.byType(InteractiveViewer),
+    );
+    final focal = tester.getCenter(find.byType(SlideImage));
+    final first = await tester.startGesture(
+      focal - const Offset(24, 0),
+      pointer: 1,
+    );
+    final second = await tester.startGesture(
+      focal + const Offset(24, 0),
+      pointer: 2,
+    );
+    await second.moveTo(focal + const Offset(100, 0));
+    await first.moveTo(focal - const Offset(100, 0));
+    await tester.pump();
+    await first.up();
+    await second.up();
+    await tester.pumpAndSettle();
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(boundaryKey),
+    );
+    await tester.runAsync(() async {
+      final image = await boundary.toImage(pixelRatio: 1);
+      final pixels = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final png = await image.toByteData(format: ui.ImageByteFormat.png);
+      final top = boundary
+          .globalToLocal(Offset(questionRect.center.dx, questionRect.top + 12))
+          .dy
+          .toInt();
+      for (var y = top; y < (top + 40).clamp(0, image.height); y++) {
+        for (var x = 30; x < image.width - 30; x++) {
+          final offset = (y * image.width + x) * 4;
+          expect(
+            pixels!.getUint8(offset) == 255 &&
+                pixels.getUint8(offset + 1) == 0 &&
+                pixels.getUint8(offset + 2) == 255,
+            isFalse,
+            reason: '放大后的图片不能覆盖题卡像素',
+          );
+        }
+      }
+      final folder = Directory('.workspace-bootstrap/qa-1.1.1')
+        ..createSync(recursive: true);
+      File(
+        '${folder.path}/mobile-slide-question-zoom.png',
+      ).writeAsBytesSync(png!.buffer.asUint8List());
+      image.dispose();
+    });
+    expect(
+      tester.widget<InteractiveViewer>(viewer).clipBehavior,
+      Clip.hardEdge,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
   for (final pages in [8, 30]) {
     testWidgets('$pages页课件跟随时中段置顶、尾段自然到底，手动浏览和关闭跟随不受影响', (tester) async {
       final controller = _Controller(), live = _live(pages: pages);
@@ -272,6 +516,189 @@ void main() {
         closeTo(pane.top, 1),
       );
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    });
+  }
+
+  testWidgets('同一题卡实例中途启用固定答题立即显示生成选项并保留人工修改', (tester) async {
+    final controller =
+        AppController(
+            api: _EmptyApi(),
+            store: _Store(),
+            background: _Background(),
+            autostart: _Autostart(),
+            startTimers: false,
+            connectSockets: false,
+          )
+          ..initialized = true
+          ..account = const Account(id: 'user', name: '用户');
+    final live = _live();
+    const question = Question(
+      id: 'prepared-choice',
+      type: 1,
+      body: '准备中的选择题',
+      options: {'A': '甲', 'B': '乙', 'C': '丙', 'D': '丁'},
+    );
+    live.questions
+      ..clear()
+      ..[question.id] = question;
+    live.presentations['deck'] = const Presentation(
+      id: 'deck',
+      title: '课件',
+      slides: [
+        Slide(id: 'q-slide', index: 0, imageUrl: '', question: question),
+      ],
+    );
+    live.activeProblemIds.clear();
+    controller.classrooms[live.lesson.id] = live;
+    final card = QuestionCard(
+      controller: controller,
+      classroom: live,
+      question: question,
+    );
+    await _mount(
+      tester,
+      Scaffold(body: SingleChildScrollView(child: card)),
+      const Size(390, 840),
+    );
+    final initialState = tester.state(find.byType(QuestionCard));
+    expect(
+      tester
+          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+          .every((tile) => tile.value == false),
+      isTrue,
+    );
+    await controller.saveSettings(
+      AppSettings(autoAnswer: true, fixedSingleAnswer: 'C'),
+    );
+    await tester.pump();
+    expect(tester.state(find.byType(QuestionCard)), same(initialState));
+    expect(live.draftAnswers[question.id], ['C']);
+    expect(
+      tester
+          .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(2))
+          .value,
+      isTrue,
+    );
+    await tester.tap(find.byType(CheckboxListTile).first);
+    await tester.pump();
+    await controller.saveSettings(
+      AppSettings(autoAnswer: true, fixedSingleAnswer: 'D'),
+    );
+    await tester.pump();
+    expect(live.draftAnswers[question.id], ['A']);
+    expect(
+      tester
+          .widget<CheckboxListTile>(find.byType(CheckboxListTile).first)
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(3))
+          .value,
+      isFalse,
+    );
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  for (final rebuildParent in [false, true]) {
+    testWidgets('异步自定义AI完成后同一题卡即时显示选项，父监听=$rebuildParent', (tester) async {
+      final ai = _DelayedAi();
+      final controller =
+          AppController(
+              api: _EmptyApi(),
+              ai: ai,
+              store: _Store(),
+              background: _Background(),
+              autostart: _Autostart(),
+              startTimers: false,
+              connectSockets: false,
+            )
+            ..initialized = true
+            ..account = const Account(id: 'user', name: '用户');
+      final live = _live();
+      const question = Question(
+        id: 'ai-choice',
+        type: 1,
+        body: '自定义AI选择题',
+        options: {'A': '甲', 'B': '乙', 'C': '丙', 'D': '丁'},
+      );
+      live.questions
+        ..clear()
+        ..[question.id] = question;
+      live.presentations['deck'] = const Presentation(
+        id: 'deck',
+        title: '课件',
+        slides: [
+          Slide(id: 'ai-slide', index: 0, imageUrl: '', question: question),
+        ],
+      );
+      live.activeProblemIds.clear();
+      controller.classrooms[live.lesson.id] = live;
+      final fixedCard = QuestionCard(
+        key: const ValueKey('same-ai-card'),
+        controller: controller,
+        classroom: live,
+        question: question,
+      );
+      final child = rebuildParent
+          ? AnimatedBuilder(
+              animation: controller,
+              builder: (context, _) => QuestionCard(
+                key: const ValueKey('same-ai-card'),
+                controller: controller,
+                classroom: live,
+                question: question,
+              ),
+            )
+          : fixedCard;
+      await _mount(
+        tester,
+        Scaffold(body: SingleChildScrollView(child: child)),
+        const Size(390, 840),
+      );
+      final state = tester.state(find.byType(QuestionCard));
+      await controller.saveSettings(
+        AppSettings(
+          autoAnswer: true,
+          answerMode: AnswerMode.ai,
+          baseUrl: 'https://offline.invalid/v1',
+          apiKey: 'test-key',
+          model: 'test-model',
+        ),
+      );
+      await tester.pump();
+      expect(ai.requests, 1);
+      expect(live.draftAnswers.containsKey(question.id), isFalse);
+      expect(
+        tester
+            .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+            .every((tile) => tile.value == false),
+        isTrue,
+      );
+      ai.response.complete('C');
+      await tester.pumpAndSettle();
+      expect(tester.state(find.byType(QuestionCard)), same(state));
+      expect(live.draftAnswers[question.id], ['C']);
+      expect(
+        tester
+            .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(2))
+            .value,
+        isTrue,
+      );
+      expect(
+        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+        isNull,
+        reason: '尚未发布的题只能预填',
+      );
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: '父级notify重建与题卡自身监听不得在build期间setState报错',
+      );
       await tester.pumpWidget(const SizedBox());
       controller.dispose();
     });

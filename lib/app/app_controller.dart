@@ -1890,7 +1890,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       for (final id in pending) {
         queried.add(id);
         try {
-          final answers = await api.ownAnswers(live.lesson.id, id);
+          final answers = await api.ownAnswers(
+            live.lesson.id,
+            id,
+            session: live.session,
+          );
           if (!_valid(live)) return;
           live.answers.addAll(answers);
         } catch (failure) {
@@ -2202,7 +2206,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
           .where((deck) => deck.slides.any((slide) => slide.question?.id == id))
           .firstOrNull;
       if (deck != null) {
-        final remote = await api.ownAnswers(live.lesson.id, deck.id);
+        final remote = await api.ownAnswers(
+          live.lesson.id,
+          deck.id,
+          session: live.session,
+        );
         if (!_automaticSubmissionValid(live, job)) return;
         live.answers.addAll(remote);
         _observeSubmittedAnswers(live, remote.values);

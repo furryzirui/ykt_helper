@@ -61,6 +61,7 @@ class NoAutostart extends AppAutostart {
 class FakeRain extends RainApi {
   int checkins = 0, submissions = 0;
   int answerReads = 0;
+  final answerSessions = <ClassroomSession?>[];
   final submittedAnswers = <dynamic>[];
   final submittedIds = <String>[];
   final submittedTimes = <DateTime>[];
@@ -75,6 +76,10 @@ class FakeRain extends RainApi {
   AttendanceStatus attendanceValue = AttendanceStatus.unknown;
   bool failAttendance = false;
   Completer<AttendanceStatus>? pendingAttendance;
+  @override
+  Future<List<Course>> courses() async => [];
+  @override
+  Future<List<Lesson>> liveLessons() async => [];
   @override
   Future<AttendanceStatus> attendance(Lesson lesson) async {
     if (failAttendance) throw const ApiFailure('test attendance unavailable');
@@ -103,9 +108,11 @@ class FakeRain extends RainApi {
   @override
   Future<Map<String, AnswerRecord>> ownAnswers(
     String lessonId,
-    String presentationId,
-  ) async {
+    String presentationId, {
+    ClassroomSession? session,
+  }) async {
     answerReads++;
+    answerSessions.add(session);
     if (failSync) throw const ApiFailure('test sync unavailable');
     return pendingAnswers?.future ?? remote;
   }
@@ -882,6 +889,112 @@ void main() {
   );
 
   test(
+    'enabling automation mid-class fills loaded unpublished choice questions immediately',
+    () async {
+      const multi = Question(
+        id: 'multi',
+        body: '多选题',
+        type: 2,
+        options: {'A': '甲', 'B': '乙', 'C': '丙', 'D': '丁'},
+      );
+      const judgment = Question(
+        id: 'judgment',
+        body: '判断题',
+        type: 6,
+        options: {'A': '正确', 'B': '错误'},
+      );
+      api.decks['p'] = const Presentation(
+        id: 'p',
+        title: '课件',
+        slides: [
+          Slide(id: 'single', index: 0, imageUrl: '', question: question),
+          Slide(id: 'multi', index: 1, imageUrl: '', question: multi),
+          Slide(id: 'judgment', index: 2, imageUrl: '', question: judgment),
+        ],
+      );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      expect(live.draftAnswers, isEmpty);
+      await controller.saveSettings(
+        AppSettings(
+          autoAnswer: true,
+          fixedSingleAnswer: 'C',
+          fixedMultipleAnswer: 'BD',
+          fixedJudgmentAnswer: 'B',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(live.draftAnswers['q'], ['C']);
+      expect(live.draftAnswers['multi'], ['B', 'D']);
+      expect(live.draftAnswers['judgment'], ['B']);
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
+      expect(api.submissions, 0);
+    },
+  );
+
+  testWidgets(
+    'mid-class AI preparation fills an unpublished choice and retries after an explicit settings edit',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      controller.settings.autoAnswer = false;
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      expect(ai.requests, isEmpty);
+      final enabled = AppSettings.fromJson(controller.settings.toJson())
+        ..autoAnswer = true;
+      await controller.saveSettings(enabled);
+      await tester.pump();
+      expect(ai.requests['q'], hasLength(1));
+      ai.requests['q']!.single.completeError(const ApiFailure('offline'));
+      await tester.pump();
+      expect(live.autoStates['q'], contains('offline'));
+      expect(live.draftAnswers, isEmpty);
+      await controller.saveSettings(
+        AppSettings.fromJson(controller.settings.toJson())
+          ..model = 'another-model',
+      );
+      await tester.pump();
+      expect(ai.requests['q'], hasLength(2));
+      ai.requests['q']![1].complete('C');
+      await tester.pump();
+      expect(live.draftAnswers['q'], ['C']);
+      expect(api.submissions, 0);
+      expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
+    },
+  );
+
+  test(
+    'enabling automation preserves manually edited and already submitted choices',
+    () async {
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      await controller.saveSettings(
+        AppSettings(autoAnswer: true, fixedSingleAnswer: 'C'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(live.draftAnswers['q'], ['B']);
+      live.answers['q'] = const AnswerRecord(
+        problemId: 'q',
+        answer: ['A'],
+        source: AnswerSource.server,
+      );
+      await controller.saveSettings(AppSettings(autoAnswer: false));
+      await controller.saveSettings(
+        AppSettings(autoAnswer: true, fixedSingleAnswer: 'C'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(live.answers['q']!.answer, ['A']);
+      expect(live.autoStates['q'], '答案已提交');
+      expect(api.submissions, 0);
+    },
+  );
+
+  test(
     'an unlock fetched before suspension cannot reactivate an old question',
     () async {
       final live = await controller.enter(lesson);
@@ -1384,6 +1497,72 @@ void main() {
       expect(live.answers['q']!.display, 'B');
     },
   );
+
+  test(
+    'a new live device synchronizes submitted answers with its classroom session before editing or automation',
+    () async {
+      api.remote = {
+        'q': const AnswerRecord(
+          problemId: 'q',
+          answer: ['C'],
+          source: AnswerSource.server,
+        ),
+      };
+      controller.settings = AppSettings(autoAnswer: true, autoSubmit: true);
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      expect(api.answerSessions, isNotEmpty);
+      expect(
+        api.answerSessions.every((session) => identical(session, live.session)),
+        true,
+      );
+      expect(live.answers['q']!.answer, ['C']);
+      expect(live.answers['q']!.score, isNull);
+      expect(live.draftAnswers.containsKey('q'), false);
+      expect(controller.answerStatus(live, live.questions['q']!), '答案已提交');
+      expect(api.submissions, 0);
+    },
+  );
+
+  testWidgets(
+    'final automatic preflight uses the live session and respects an answer submitted from another device',
+    (tester) async {
+      resetForWidgetTest();
+      controller.settings = AppSettings(
+        autoAnswer: true,
+        autoSubmit: true,
+        autoSubmitDelaySeconds: 1,
+      );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.syncAnswers(live);
+      await controller.processEvent(
+        live,
+        unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
+      );
+      await tester.pump();
+      api.answerSessions.clear();
+      api.remote = {
+        'q': const AnswerRecord(
+          problemId: 'q',
+          answer: ['B'],
+          source: AnswerSource.server,
+        ),
+      };
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.answerSessions, isNotEmpty);
+      expect(
+        api.answerSessions.every((session) => identical(session, live.session)),
+        true,
+      );
+      expect(live.answers['q']!.answer, ['B']);
+      expect(live.draftAnswers.containsKey('q'), false);
+      expect(api.submissions, 0);
+    },
+  );
+
   test(
     'expired questions and unknown remote states do not trigger automation',
     () async {

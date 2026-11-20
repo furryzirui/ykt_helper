@@ -125,6 +125,7 @@ class SlideImage extends StatelessWidget {
     child: slide.imageUrl.isEmpty && imageProvider == null
         ? const SizedBox(height: 80, child: Center(child: Text('此页没有课件图片')))
         : InteractiveViewer(
+            clipBehavior: Clip.hardEdge,
             minScale: 1,
             maxScale: 5,
             child: Image(
@@ -213,6 +214,7 @@ class SlideThumbnail extends StatelessWidget {
   final domain.Slide slide;
   final int page;
   final bool selected;
+  final bool teacherCurrent;
 
   /// Allows a classroom's separately synchronized question data to label a page.
   final String? questionLabel;
@@ -222,6 +224,7 @@ class SlideThumbnail extends StatelessWidget {
     required this.slide,
     required this.page,
     required this.selected,
+    this.teacherCurrent = false,
     this.questionLabel,
     required this.onTap,
   });
@@ -233,7 +236,8 @@ class SlideThumbnail extends StatelessWidget {
         ? questionLabel!.trim()
         : slide.question?.typeLabel ?? (slide.ownAnswer == null ? null : '题目');
     return Semantics(
-      label: '第 $page 页${label == null ? '' : '，含题目，$label'}',
+      label:
+          '第 $page 页${teacherCurrent ? '，教师当前页' : ''}${label == null ? '' : '，含题目，$label'}',
       selected: selected,
       button: true,
       onTap: onTap,
@@ -245,8 +249,14 @@ class SlideThumbnail extends StatelessWidget {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: BorderSide(
-            color: selected ? scheme.primary : scheme.outlineVariant,
-            width: selected ? 2 : 1,
+            color: selected || teacherCurrent
+                ? scheme.primary
+                : scheme.outlineVariant,
+            width: teacherCurrent
+                ? 3
+                : selected
+                ? 2
+                : 1,
           ),
         ),
         clipBehavior: Clip.antiAlias,
@@ -270,6 +280,17 @@ class SlideThumbnail extends StatelessWidget {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
+                    if (teacherCurrent) ...[
+                      Tooltip(
+                        message: '教师当前页',
+                        child: Icon(
+                          Icons.sensors,
+                          size: 13,
+                          color: scheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
                     Text(
                       '$page',
                       style: Theme.of(context).textTheme.labelSmall,

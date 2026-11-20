@@ -730,7 +730,9 @@ class RainApi {
     Map<String, AnswerRecord> answers = {};
     if (withAnswers) {
       try {
-        answers = await ownAnswers(lessonId, presentationId);
+        answers = session != null
+            ? _livePresentationAnswers(data, lessonId, presentationId)
+            : await ownAnswers(lessonId, presentationId);
         answersKnown = true;
       } catch (e) {
         answerError = str(e);
@@ -752,8 +754,23 @@ class RainApi {
 
   Future<Map<String, AnswerRecord>> ownAnswers(
     String lessonId,
-    String presentationId,
-  ) async {
+    String presentationId, {
+    ClassroomSession? session,
+  }) async {
+    if (session != null) {
+      if (session.lessonId != lessonId || presentationId.isEmpty) {
+        throw const ApiFailure('本人答案与课堂凭证不匹配');
+      }
+      final data = await _data(
+        '/api/v3/lesson/presentation/fetch',
+        query: {'presentation_id': presentationId},
+        session: session,
+      );
+      // The live frontend reads problem.result from its authenticated PPT
+      // response. The similarly named lesson-summary endpoint is after-class
+      // data and cannot establish an ongoing student's submission status.
+      return _livePresentationAnswers(data, lessonId, presentationId);
+    }
     Object? summaryFailure;
     Json? summary;
     if (presentationId.isNotEmpty) {
@@ -783,6 +800,45 @@ class RainApi {
       }
       rethrow;
     }
+  }
+
+  Map<String, AnswerRecord> _livePresentationAnswers(
+    Json data,
+    String lessonId,
+    String presentationId,
+  ) {
+    _match(data, 'lessonId', lessonId, '本人答案课堂');
+    _match(data, 'presentationId', presentationId, '本人答案课件');
+    _match(data, 'id', presentationId, '本人答案课件');
+    final slides = data['slides'];
+    if (slides is! List) {
+      throw const ApiFailure('实时课件未返回本人作答页面，当前状态未知');
+    }
+    final answers = <String, AnswerRecord>{};
+    for (final raw in slides) {
+      final slide = object(raw);
+      if (slide['problem'] == null) continue;
+      if (slide['problem'] is! Map) {
+        throw const ApiFailure('实时课件题目格式无效，当前状态未知');
+      }
+      final problem = object(slide['problem']);
+      final id = str(problem['problemId']);
+      if (id.isEmpty || !problem.containsKey('result')) {
+        throw const ApiFailure('实时课件未返回完整本人作答状态，当前状态未知');
+      }
+      final answer = problem['result'];
+      if (answer == null) continue;
+      final type = integer(problem['problemType']);
+      if (type == 5 ? answer is! Map : answer is! List) {
+        throw const ApiFailure('实时课件本人答案格式无效，当前状态未知');
+      }
+      answers[id] = AnswerRecord(
+        problemId: id,
+        answer: answer,
+        source: AnswerSource.server,
+      );
+    }
+    return answers;
   }
 
   Map<String, AnswerRecord> _summaryAnswers(

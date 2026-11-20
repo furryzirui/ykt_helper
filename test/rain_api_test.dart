@@ -473,6 +473,196 @@ void main() {
     },
   );
 
+  test(
+    'ongoing personal answers use authenticated live PPT results instead of after-class summary',
+    () async {
+      final transport = FakeTransport((r) {
+        expect(r.uri.path, '/api/v3/lesson/presentation/fetch');
+        expect(r.queryParameters, {'presentation_id': 'deck'});
+        expect(r.headers['Authorization'], 'Bearer http');
+        return ok({
+          'lessonId': 'l',
+          'id': 'deck',
+          'slides': [
+            {
+              'problem': {
+                'problemId': 'choice',
+                'problemType': 1,
+                'answer': ['A'],
+                'result': ['B'],
+                'getScore': null,
+              },
+            },
+            {
+              'problem': {
+                'problemId': 'subjective',
+                'problemType': 5,
+                'result': {'content': '另一台设备提交的答案', 'pics': []},
+                'score': 1000,
+              },
+            },
+            {
+              'problem': {
+                'problemId': 'unsubmitted',
+                'problemType': 2,
+                'result': null,
+              },
+            },
+          ],
+        });
+      });
+      final answers = await client(
+        transport,
+      ).ownAnswers('l', 'deck', session: session);
+      expect(answers.keys, ['choice', 'subjective']);
+      expect(answers['choice']!.answer, ['B']);
+      expect(answers['choice']!.score, isNull);
+      expect(answers['subjective']!.display, '另一台设备提交的答案');
+      expect(answers['subjective']!.score, isNull);
+      expect(
+        answers.values.every((answer) => answer.source == AnswerSource.server),
+        true,
+      );
+      expect(transport.requests, hasLength(1));
+    },
+  );
+
+  test(
+    'live presentation reuses embedded personal results without requesting after-class APIs',
+    () async {
+      final transport = FakeTransport((r) {
+        expect(r.uri.path, '/api/v3/lesson/presentation/fetch');
+        return ok({
+          'id': 'deck',
+          'slides': [
+            {
+              'id': 'slide',
+              'index': 0,
+              'problem': {
+                'problemId': 'choice',
+                'problemType': 1,
+                'result': ['C'],
+              },
+            },
+          ],
+        });
+      });
+      final deck = await client(
+        transport,
+      ).presentation('l', 'deck', session: session);
+      expect(deck.answersKnown, true);
+      expect(deck.slides.single.ownAnswer!.answer, ['C']);
+      expect(transport.requests, hasLength(1));
+    },
+  );
+
+  for (final personal in [
+    <String, dynamic>{
+      'problemId': 'q',
+      'problemType': 1,
+      'answer': ['A'],
+    },
+    <String, dynamic>{'problemId': 'q', 'problemType': 1, 'result': false},
+    <String, dynamic>{
+      'problemId': 'q',
+      'problemType': 5,
+      'result': ['A'],
+    },
+  ]) {
+    test('malformed live personal state remains unknown: $personal', () async {
+      final transport = FakeTransport(
+        (r) => ok({
+          'id': 'deck',
+          'slides': [
+            {'problem': personal},
+          ],
+        }),
+      );
+      await expectLater(
+        client(transport).ownAnswers('l', 'deck', session: session),
+        throwsA(
+          allOf(
+            isA<ApiFailure>(),
+            predicate((e) => e.toString().contains('未知')),
+          ),
+        ),
+      );
+      expect(transport.requests, hasLength(1));
+    });
+  }
+
+  test(
+    'live answer request refuses a session from another lesson before HTTP',
+    () async {
+      final transport = FakeTransport((r) => ok({}));
+      await expectLater(
+        client(transport).ownAnswers('another', 'deck', session: session),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(transport.requests, isEmpty);
+    },
+  );
+
+  test(
+    'mismatched live presentation identity cannot import another course answers',
+    () async {
+      final transport = FakeTransport(
+        (r) => ok({'lessonId': 'other', 'id': 'deck', 'slides': []}),
+      );
+      await expectLater(
+        client(transport).ownAnswers('l', 'deck', session: session),
+        throwsA(isA<ApiFailure>()),
+      );
+    },
+  );
+
+  test(
+    'live empty answer containers are completed while explicit null is not',
+    () async {
+      final api = client(
+        FakeTransport(
+          (r) => ok({
+            'id': 'deck',
+            'slides': [
+              {
+                'problem': {
+                  'problemId': 'vote',
+                  'problemType': 3,
+                  'result': [],
+                },
+              },
+              {
+                'problem': {
+                  'problemId': 'blank',
+                  'problemType': 4,
+                  'result': [],
+                },
+              },
+              {
+                'problem': {
+                  'problemId': 'subjective',
+                  'problemType': 5,
+                  'result': {},
+                },
+              },
+              {
+                'problem': {
+                  'problemId': 'unanswered',
+                  'problemType': 1,
+                  'result': null,
+                },
+              },
+            ],
+          }),
+        ),
+      );
+      final answers = await api.ownAnswers('l', 'deck', session: session);
+      expect(answers.keys, ['vote', 'blank', 'subjective']);
+      expect(answers['vote']!.answer, isEmpty);
+      expect(answers['subjective']!.answer, isEmpty);
+    },
+  );
+
   test('summary missing personal answer is unknown', () async {
     final api = client(
       FakeTransport(

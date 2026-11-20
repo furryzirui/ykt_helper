@@ -51,7 +51,11 @@ course_helper `lib/api/login.dart`、`lib/api/course.dart` 与 ykt_assistant `do
 
 官方 `90500.cfbd8a04.js` 将 `detail.problem.studentList` 绑定本人的题目列表。`89458.8fbee808.js` 的学生题目组件读取 `problemId`、`problem_type`、`isAnswered`、`result`、`problemscore`；只有明确 `isAnswered=true` 才记录本人已作答。状态字段缺失显示未知。
 
-进行中优先使用官网 `pc.3518d2db.js` 定义、`95924.10988234.js` 调用的 `GET /api/v3/lesson-summary/student/presentation?lesson_id=...&presentation_id=...`，响应 `data.presentation/data.slides`。官方 `formatPresentation` 将 `slide.result` 绑定到 `slide.problem.result`；`addProblem` 以 `slide.problem.problemId` 关联题目，`slide.result.answer` 为本人答案。其完成条件是 `!!result && result.score !== null`，因此分数 0 和 -1 均已完成，-1 代表待批改；无 result 或 score:null 为暂无提交。结果对象缺少 score 字段或已完成却缺少 answer 必须标为未知，不以 `problem.content.answer` 补齐。正分数按官网 `/100`，0 和负状态值原样保留。summary 接口请求不可用时回退课堂报告，成功响应结构损坏时直接报告未知。
+历史课堂使用官网 `pc.3518d2db.js` 定义、`95924.10988234.js` 调用的 `GET /api/v3/lesson-summary/student/presentation?lesson_id=...&presentation_id=...`，响应 `data.presentation/data.slides`。官方 `formatPresentation` 将 `slide.result` 绑定到 `slide.problem.result`；`addProblem` 以 `slide.problem.problemId` 关联题目，`slide.result.answer` 为本人答案。其完成条件是 `!!result && result.score !== null`，因此分数 0 和 -1 均已完成，-1 代表待批改；无 result 或 score:null 为暂无提交。结果对象缺少 score 字段或已完成却缺少 answer 必须标为未知，不以 `problem.content.answer` 补齐。正分数按官网 `/100`，0 和负状态值原样保留。summary 接口请求不可用时回退课堂报告，成功响应结构损坏时直接报告未知。这是课后数据协议，不能用其空结果证明进行中的课堂尚未提交。
+
+2026-11-20 重新读取公开普通版直播入口，仍为 `lesson/3.3.241`。`fullscreen.b2d05c0f1c969680f5d5.js` 的 `/v3/:lessonID` 路由加载 `12.7a3c38d7e231e5b9793c.js`；其 `getPresentation` 用课堂 Bearer 调用 `GET /api/v3/lesson/presentation/fetch?presentation_id=<id>`。直播 `addProblem` 直接以 `slide.problem.result` 的真值决定已完成，主观题组件 `16.89f06c9fa277deceeb6f.js` 将 `this.oProblem.result` 原样用于本人结果展示；这里的 `result` 本身是选项/填空数组或主观对象，不是课后摘要的 `{score,answer}` 包装，也不依赖已批分。`null` 表示未提交，JavaScript 的空数组、空对象仍是真值，不能仅因容器为空就重判未作答。未提供 `result` 字段、结构错误或归属不符仍报告未知；不会从题目标准答案字段补齐。
+
+1.1.1 的实时答案同步、手动刷新和自动提交前最后复查均改用当前课堂会话的上述直播端点；只有历史读取沿用 summary/报告。类型 1/2/3/4/6 要求数组，类型 5 要求对象，来源标记为服务端；直播 `problem.score` 是题目满分，不冒充个人得分。以上核对使用公开官方脚本，未访问用户账号或真实课堂响应；跨设备最终返回情况仍需新测试包联调。
 
 官方 `25711.629d13aa.js` 的个人题目详情请求：
 
