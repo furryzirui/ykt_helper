@@ -27,6 +27,7 @@ class _Notifications extends ClassroomNotifications {
   final shown = <({String key, String body, String lesson, String problem})>[];
   final cancelled = <String>[];
   int clears = 0;
+  bool allowed = true;
   Completer<bool>? pending;
   @override
   Future<bool> show({
@@ -37,7 +38,7 @@ class _Notifications extends ClassroomNotifications {
     required String problemId,
   }) async {
     shown.add((key: key, body: body, lesson: lessonId, problem: problemId));
-    return await pending?.future ?? true;
+    return await pending?.future ?? allowed;
   }
 
   @override
@@ -120,6 +121,20 @@ void main() {
     pulse();
     expect(notifications.shown.single.body, contains('确认提交'));
   });
+
+  test(
+    'a rejected native delivery can be retried after permission or visibility changes',
+    () async {
+      notifications.allowed = false;
+      controller.setForeground(false);
+      await Future<void>.delayed(Duration.zero);
+      notifications.allowed = true;
+      pulse();
+      await Future<void>.delayed(Duration.zero);
+      pulse();
+      expect(notifications.shown, hasLength(2));
+    },
+  );
 
   test('ready drafts and failed automatic work have distinct reminders', () {
     controller.settings = AppSettings(autoAnswer: true);

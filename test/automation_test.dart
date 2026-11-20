@@ -604,6 +604,37 @@ void main() {
   });
 
   testWidgets(
+    'late timing uses publication time and server offset instead of restarting delay',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      ai.requests['q']!.single.complete('A');
+      await tester.pump();
+      await controller.syncAnswers(live);
+      final localNow = controller.now().millisecondsSinceEpoch;
+      const offset = 5000;
+      await controller.processEvent(live, {
+        'op': 'unlockproblem',
+        'problem': {
+          'prob': 'q',
+          'dt': localNow + offset - 20000,
+          'now': localNow + offset,
+          'limit': 120,
+        },
+      });
+      await tester.pump();
+      expect(live.autoStates['q'], '答案已填充，10 秒后自动提交');
+      await tester.pump(const Duration(seconds: 9));
+      expect(api.submissions, 0);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submittedIds, ['q']);
+    },
+  );
+
+  testWidgets(
     'explicit future timing cannot submit early and opens without another event',
     (tester) async {
       final ai = BatchAi();

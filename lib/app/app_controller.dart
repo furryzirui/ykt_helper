@@ -279,13 +279,17 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     String body,
   ) async {
     try {
-      await notifications.show(
+      final delivered = await notifications.show(
         key: key,
         title: live.lesson.title,
         body: body,
         lessonId: live.lesson.id,
         problemId: question.id,
       );
+      if (!delivered && generation == _generation && _valid(live)) {
+        _attentionAttempts.remove(key);
+        _activeAttention.remove(key);
+      }
       if (_foreground ||
           _disposed ||
           generation != _generation ||
@@ -1669,7 +1673,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     } else if (_inWindow(question)) {
       live._timingConfirmed.add(id);
       live.activeProblemIds.add(id);
-      live._answerableSince.putIfAbsent(id, now);
+      live._answerableSince[id] = _publishedAt(question);
     } else {
       if (data['limit'] is num) live._timingConfirmed.add(id);
       live.activeProblemIds.remove(id);
@@ -1729,7 +1733,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     live._timingConfirmed.add(question.id);
     if (_inWindow(updated)) {
       live.activeProblemIds.add(question.id);
-      live._answerableSince.putIfAbsent(question.id, now);
+      live._answerableSince[question.id] = _publishedAt(updated);
     } else {
       live.activeProblemIds.remove(question.id);
       live._answerableSince.remove(question.id);
@@ -1772,7 +1776,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
           live.autoStates[id] = answerStatus(live, question);
         } else if (_inWindow(question)) {
           live.activeProblemIds.add(id);
-          live._answerableSince.putIfAbsent(id, now);
+          live._answerableSince[id] = _publishedAt(question);
           _armQuestionTiming(live, question);
           unawaited(_runAutomatic(live));
         }
@@ -1784,6 +1788,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   int _questionTime(Question question) =>
       now().millisecondsSinceEpoch + question.serverOffsetMillis;
+
+  DateTime _publishedAt(Question question) =>
+      DateTime.fromMillisecondsSinceEpoch(
+        question.dt - question.serverOffsetMillis,
+      );
 
   bool _inWindow(Question question) =>
       question.dt > 0 &&
