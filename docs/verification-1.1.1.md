@@ -50,4 +50,15 @@
 - 按用户要求取消周期、课堂事件及提交前的重复本人答案请求。进入时复用课件加载内嵌结果，每次成功提交后更新本人答案；用户主动刷新仍可同步。
 - 跳过作答不写日志。题目正文与选项、AI 原始回复、草稿/提交答案、同步结果写入本机详细日志，点击详情与导出内容一致。凭证、认证头和媒体数据继续过滤；超长正文截断并标记。
 - 全部 535 项 Flutter 测试通过，静态分析无问题；覆盖读取次数、课件内嵌结果、提交后定向同步、同步失败不重交、内容日志持久化与凭证脱敏。
-- 本轮不进行设备运行测试，安装包与 CI 记录在构建完成后补充。
+- [Android CI](https://github.com/furryzirui/ykt_helper/actions/runs/44709391539) 和 [Windows / iOS CI](https://github.com/furryzirui/ykt_helper/actions/runs/44709435643) 均成功，源提交为 `7b388892b7c0113cb0a69282c3e7ffdf75e02d6c`。CI 再次通过 535 项测试；Windows 自启动原生检查通过。
+- Android 已核对 1.1.1+19、包名、两种 ABI 分包、原发布证书、v2 签名和 ZIP CRC。
+- Windows 已核对安装器 PE/版本/x64 构建，以及 CI 28 个运行文件签名清单与压缩记录；未本地解包或运行安装器。
+- iOS 已核对 1.1.1+19、arm64、iOS 15 最低版本、主程序未签名、ZIP CRC、Ed25519 清单签名和全部 50 个文件摘要。
+- 本轮不进行设备运行测试。
+
+| 正式安装包 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| ykt_helper-1.1.1-android-arm64-v8a.apk | 28749604 | `947005c5d28974a0e1c48b6d51bca12e35a3bc97db1cc47b69848991d3a606f0` |
+| ykt_helper-1.1.1-android-universal.apk | 78791378 | `7ef5a339b370328ceeabd15f8118e87b703fdf3e6e9a92cf862f1d902af7d169` |
+| ykt_helper-1.1.1-windows-setup.exe | 12451716 | `e48d5e9a13e7cf0efba11ef5d50d0f11950a55d505bdf1dd2226b9311eec082a` |
+| ykt_helper-1.1.1-ios-unsigned.ipa | 9380252 | `043b9b56ecde02752d4fb7fdea4dc030a205deaba5a1055264d46542f22fa0ef` |
