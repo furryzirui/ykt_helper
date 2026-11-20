@@ -16,4 +16,9 @@
 
 ## Android 安装包
 
-构建后核对版本、架构、原发布证书、v2 签名与 ZIP 完整性，再补充产物摘要。
+安装包源代码：`445d00c16560fded43b9d8c77b371b7afad06e22`。两个 APK 均通过 1.1.0+16、包名、ABI、原发布证书、v2 签名和 ZIP CRC 校验；已核对各架构包含最新提示词与课堂提醒代码。可覆盖安装同签名正式版。本轮未上传 GitHub Release。
+
+| 安装包 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| ykt_helper-1.1.0-android-arm64-v8a.apk | 28684068 | `acacd7a40ce61171d1b69069bfaafde8fffee997b53184dca99eb9fff30ee71b` |
+| ykt_helper-1.1.0-android-universal.apk | 78463698 | `d73bd1deb4aaee769ac5283d5c9510159e8954726676bd5c15d4d77097f5ed04` |
