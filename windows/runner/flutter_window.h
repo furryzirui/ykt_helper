@@ -32,6 +32,11 @@ class FlutterWindow : public Win32Window {
   bool tray_icon_ = false;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> startup_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> runtime_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> classroom_notifications_channel_;
+  std::string classroom_reminder_key_;
+  bool ShowClassroomReminder(const std::string& key, const std::wstring& title,
+                            const std::wstring& body);
+  void CancelClassroomReminder();
   void ShowExisting();
   void UpdateTrayIcon(bool add);
 

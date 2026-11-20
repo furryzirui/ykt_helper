@@ -10,6 +10,14 @@ import 'package:ykt_helper/services/ai_answer.dart';
 import 'package:ykt_helper/services/app_autostart.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 
+DateTime automationTestNow() {
+  try {
+    return TestWidgetsFlutterBinding.instance.clock.now();
+  } on AssertionError {
+    return DateTime.now();
+  }
+}
+
 class MemoryStore implements KeyValueStore {
   final Map<String, String> values = {};
   @override
@@ -54,6 +62,10 @@ class FakeRain extends RainApi {
   int checkins = 0, submissions = 0;
   int answerReads = 0;
   final submittedAnswers = <dynamic>[];
+  final submittedIds = <String>[];
+  final submittedTimes = <DateTime>[];
+  DateTime Function()? clock;
+  Completer<void>? pendingSubmit;
   bool failSubmit = false, failSync = false;
   final decks = <String, Presentation>{};
   Map<String, AnswerRecord> remote = {};
@@ -106,7 +118,10 @@ class FakeRain extends RainApi {
   ) async {
     submissions++;
     submittedAnswers.add(answer);
+    submittedIds.add(question.id);
+    submittedTimes.add(clock?.call() ?? DateTime.now());
     if (failSubmit) throw const ApiFailure('test response lost');
+    await pendingSubmit?.future;
   }
 
   @override
@@ -186,7 +201,7 @@ void main() {
     'problem': {
       'prob': id,
       'limit': 60,
-      'dt': dt ?? DateTime.now().millisecondsSinceEpoch,
+      'dt': dt ?? controller.now().millisecondsSinceEpoch,
       'pres': ?deck,
     },
   };
@@ -211,6 +226,7 @@ void main() {
       background: NoBackground(),
       autostart: const NoAutostart(),
       startTimers: false,
+      now: automationTestNow,
       connectSockets: false,
     );
     controller.account = const Account(id: 'u', name: '测试');
@@ -226,6 +242,7 @@ void main() {
       background: NoBackground(),
       autostart: const NoAutostart(),
       startTimers: false,
+      now: automationTestNow,
       connectSockets: false,
     )..account = const Account(id: 'u', name: '测试');
   }
@@ -250,7 +267,254 @@ void main() {
             autoSubmit: true,
             answerMode: AnswerMode.ai,
           );
+    api.clock = tester.binding.clock.now;
   }
+
+  Future<LiveClass> prepareBatch(
+    WidgetTester tester,
+    BatchAi ai, {
+    int delay = 5,
+  }) async {
+    useAiClock(tester, ai);
+    controller.settings.autoSubmitDelaySeconds = delay;
+    api.decks['p'] = const Presentation(
+      id: 'p',
+      title: '批量',
+      slides: [
+        Slide(id: 's1', index: 0, imageUrl: '', question: question),
+        Slide(
+          id: 's2',
+          index: 1,
+          imageUrl: '',
+          question: Question(
+            id: 'q2',
+            body: '第二题',
+            type: 1,
+            options: {'A': '甲', 'B': '乙', 'C': '丙'},
+          ),
+        ),
+      ],
+    );
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.syncAnswers(live);
+    return live;
+  }
+
+  Future<void> openBatch(WidgetTester tester, LiveClass live) async {
+    final dt = tester.binding.clock.now().millisecondsSinceEpoch;
+    for (final id in ['q2', 'q']) {
+      await controller.processEvent(live, unlock(id: id, dt: dt));
+    }
+    await tester.pump();
+  }
+
+  testWidgets(
+    'same-batch page order waits for the first success then spaces the next',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      final pending = Completer<void>();
+      api.pendingSubmit = pending;
+      await tester.pump(const Duration(seconds: 5));
+      expect(api.submittedIds, ['q']);
+      await tester.pump(const Duration(seconds: 7));
+      expect(api.submittedIds, ['q']);
+      api.pendingSubmit = null;
+      pending.complete();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 4));
+      expect(api.submittedIds, ['q']);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submittedIds, ['q', 'q2']);
+      expect(
+        api.submittedTimes[1].difference(api.submittedTimes[0]),
+        const Duration(seconds: 12),
+      );
+    },
+  );
+
+  testWidgets(
+    'manual submissions bypass the queue and space pending automatic work',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      final pending = Completer<void>();
+      api.pendingSubmit = pending;
+      final manual = controller.submitAnswer(live, live.questions['q2']!, [
+        'C',
+      ]);
+      await tester.pump(const Duration(seconds: 8));
+      expect(api.submittedIds, ['q2']);
+      api.pendingSubmit = null;
+      pending.complete();
+      await manual;
+      await tester.pump(const Duration(seconds: 4));
+      expect(api.submittedIds, ['q2']);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submittedIds, ['q2', 'q']);
+      expect(live.autoStates['q2'], '答案已提交');
+    },
+  );
+
+  testWidgets(
+    'manual submission remains available while automatic status is unknown',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      api.failSubmit = true;
+      await expectLater(
+        controller.submitAnswer(live, live.questions['q']!, ['A']),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(live.answersKnown, isFalse);
+      expect(controller.canSubmitAnswer(live, live.questions['q2']!), isTrue);
+      api.failSubmit = false;
+      await controller.submitAnswer(live, live.questions['q2']!, ['C']);
+      expect(live.autoStates['q2'], '答案已提交');
+      expect(api.submittedIds, ['q', 'q2']);
+    },
+  );
+
+  testWidgets(
+    'manual success during an automatic prelookup postpones that automatic POST',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      api.pendingAnswers = Completer();
+      await tester.pump(const Duration(seconds: 5));
+      expect(api.submissions, 0);
+      await controller.submitAnswer(live, live.questions['q2']!, ['C']);
+      api.pendingAnswers!.complete({});
+      api.pendingAnswers = null;
+      await tester.pump();
+      expect(api.submittedIds, ['q2']);
+      await tester.pump(const Duration(seconds: 4));
+      expect(api.submittedIds, ['q2']);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submittedIds, ['q2', 'q']);
+    },
+  );
+
+  testWidgets(
+    'head AI is awaited and an explicit AI failure skips to the next question',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      await tester.pump(const Duration(seconds: 8));
+      expect(api.submissions, 0);
+      ai.requests['q']!.single.completeError(
+        const ApiFailure('provider unavailable'),
+      );
+      await tester.pump(Duration.zero);
+      await tester.pump(Duration.zero);
+      expect(api.submittedIds, ['q2']);
+      expect(live.autoStates['q'], contains('provider unavailable'));
+    },
+  );
+
+  testWidgets(
+    'an expired head with pending AI immediately releases the next ready question',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai, delay: 2);
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      final dt = controller.now().millisecondsSinceEpoch;
+      await controller.processEvent(live, {
+        'op': 'unlockproblem',
+        'problem': {'prob': 'q', 'dt': dt, 'limit': 4},
+      });
+      await controller.processEvent(live, unlock(id: 'q2', dt: dt));
+      await tester.pump(const Duration(seconds: 3));
+      expect(api.submissions, 0);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.submittedIds, ['q2']);
+      expect(live.autoStates['q'], '作答已结束');
+      ai.requests['q']!.single.complete('A');
+      await tester.pump();
+      expect(api.submittedIds, ['q2']);
+    },
+  );
+
+  testWidgets(
+    'remote newly observed submissions space work without extending on repeated reads',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      await tester.pump(const Duration(seconds: 2));
+      api.remote = {
+        'q': const AnswerRecord(
+          problemId: 'q',
+          answer: ['C'],
+          source: AnswerSource.server,
+        ),
+      };
+      await controller.syncAnswers(live);
+      await tester.pump(const Duration(seconds: 3));
+      await controller.syncAnswers(live);
+      expect(api.submissions, 0);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(api.submittedIds, ['q2']);
+    },
+  );
+
+  testWidgets(
+    'uncertain POST pauses the classroom and sync never blindly retries the failed round',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      api.failSubmit = true;
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(api.submittedIds, ['q']);
+      await tester.pump(const Duration(seconds: 5));
+      expect(api.submittedIds, ['q']);
+      api.failSubmit = false;
+      await controller.syncAnswers(live);
+      await tester.pump(Duration.zero);
+      await tester.pump();
+      expect(api.submittedIds, ['q', 'q2']);
+      await controller.processEvent(
+        live,
+        unlock(id: 'q', dt: live.questions['q']!.dt),
+      );
+      await tester.pump(const Duration(seconds: 6));
+      expect(api.submittedIds, ['q', 'q2']);
+    },
+  );
 
   testWidgets(
     'loaded questions start AI independently before timing or answer sync',
@@ -818,6 +1082,7 @@ void main() {
             background: NoBackground(),
             autostart: const NoAutostart(),
             startTimers: false,
+            now: automationTestNow,
             connectSockets: false,
           )
           ..account = const Account(id: 'u', name: '测试')
@@ -847,6 +1112,7 @@ void main() {
             background: NoBackground(),
             autostart: const NoAutostart(),
             startTimers: false,
+            now: automationTestNow,
             connectSockets: false,
           )
           ..account = const Account(id: 'u', name: '测试')
@@ -954,6 +1220,7 @@ void main() {
         background: NoBackground(),
         autostart: const NoAutostart(),
         startTimers: false,
+        now: automationTestNow,
         connectSockets: true,
       )..account = const Account(id: 'u', name: '测试');
       final live = LiveClass(
@@ -1356,6 +1623,7 @@ void main() {
             background: NoBackground(),
             autostart: const NoAutostart(),
             startTimers: false,
+            now: automationTestNow,
             connectSockets: false,
           )
           ..account = const Account(id: 'u', name: '测试')
@@ -1392,6 +1660,7 @@ void main() {
             background: NoBackground(),
             autostart: const NoAutostart(),
             startTimers: false,
+            now: automationTestNow,
             connectSockets: false,
           )
           ..account = const Account(id: 'u', name: '测试')
@@ -1429,6 +1698,7 @@ void main() {
               background: NoBackground(),
               autostart: const NoAutostart(),
               startTimers: false,
+              now: automationTestNow,
               connectSockets: false,
             )
             ..account = const Account(id: 'u', name: '测试')
@@ -1487,7 +1757,7 @@ void main() {
       'op': 'unlockproblem',
       'problem': {
         'prob': 'q',
-        'dt': DateTime.now().millisecondsSinceEpoch,
+        'dt': controller.now().millisecondsSinceEpoch,
         'limit': 10,
       },
     });
@@ -1556,6 +1826,7 @@ void main() {
         autostart: const NoAutostart(),
         ai: ai,
         startTimers: false,
+        now: automationTestNow,
         connectSockets: false,
       )..account = const Account(id: 'u', name: '测试');
       controller.settings = AppSettings(

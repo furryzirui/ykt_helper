@@ -9,9 +9,9 @@ import android.os.PowerManager
 
 object RuntimePermissions {
     private fun status(value: Boolean) = if (value) "granted" else "denied"
-    fun notificationsAllowed(context: Context): Boolean {
+    private fun channelNotificationsAllowed(context: Context, channelId: String): Boolean {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channel = manager.getNotificationChannel(ClassroomRuntimeService.CHANNEL_ID)
+        val channel = manager.getNotificationChannel(channelId)
         val groupAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             channel?.group?.let { manager.getNotificationChannelGroup(it)?.isBlocked } != true
         } else true
@@ -20,6 +20,11 @@ object RuntimePermissions {
                 context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
             channel?.importance != NotificationManager.IMPORTANCE_NONE && groupAllowed
     }
+    fun notificationsAllowed(context: Context): Boolean =
+        channelNotificationsAllowed(context, ClassroomRuntimeService.CHANNEL_ID)
+
+    fun classroomNotificationsAllowed(context: Context): Boolean =
+        channelNotificationsAllowed(context, ClassroomNotifications.CHANNEL_ID)
     fun batteryAllowed(context: Context) =
         (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
             .isIgnoringBatteryOptimizations(context.packageName)

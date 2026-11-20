@@ -41,6 +41,7 @@ class _AutomationPageState extends State<AutomationPage>
   Future<void>? _saveFlight;
   bool _dirty = false, _saveAgain = false, _leaving = false, _canPop = false;
   bool _closing = false;
+  bool _confirmingAutoSubmit = false;
   int _editRevision = 0;
   String? _saveError, _configurationError;
   int _modelGeneration = 0;
@@ -533,6 +534,53 @@ class _AutomationPageState extends State<AutomationPage>
     _edit(() => _draft!.autoLocationCheckin = value);
   }
 
+  Future<void> _setAutoSubmit(bool value) async {
+    if (_disabled || _draft == null || !_draft!.autoAnswer) return;
+    if (!value) {
+      _edit(() => _draft!.autoSubmit = false);
+      return;
+    }
+    if (_draft!.autoSubmit || _confirmingAutoSubmit) return;
+    final draft = _draft;
+    final account = widget.controller.account;
+    final revision = _editRevision;
+    _confirmingAutoSubmit = true;
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('确认自动提交'),
+          content: const Text(
+            '建议先检查 AI 或固定答案后手动确认提交，不建议开启自动提交。自动生成的答案可能有误，开启后会在允许作答并达到延迟后直接提交。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('确认开启'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true ||
+          !mounted ||
+          _disabled ||
+          _closing ||
+          !identical(account, widget.controller.account) ||
+          !identical(draft, _draft) ||
+          revision != _editRevision ||
+          !_draft!.autoAnswer) {
+        return;
+      }
+      _edit(() => _draft!.autoSubmit = true);
+    } finally {
+      _confirmingAutoSubmit = false;
+    }
+  }
+
   Future<void> _setBackgroundMode(BackgroundServiceMode? mode) async {
     if (mode == null || mode == _draft!.backgroundMode) return;
     final confirmed = await _confirmBackgroundMode(mode);
@@ -1008,10 +1056,7 @@ class _AutomationPageState extends State<AutomationPage>
                           title: const Text('自动提交'),
                           subtitle: const SettingDescription('关闭时仅填入答案，由你确认提交'),
                           value: settings.autoSubmit,
-                          onChanged: _disabled
-                              ? null
-                              : (value) =>
-                                    _edit(() => settings.autoSubmit = value),
+                          onChanged: _disabled ? null : _setAutoSubmit,
                         ),
                         if (settings.autoSubmit)
                           Padding(
@@ -1031,7 +1076,7 @@ class _AutomationPageState extends State<AutomationPage>
                               decoration: const InputDecoration(
                                 labelText: '提交延迟',
                                 suffixText: '秒',
-                                helperText: '答案生成后等待的时间，1–3600 秒',
+                                helperText: '布置题目后与相邻提交的等待时间，1–3600 秒',
                                 helperMaxLines: 3,
                                 prefixIcon: Icon(Icons.timer_outlined),
                               ),

@@ -2,6 +2,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ykt_helper/domain/models.dart';
 
 void main() {
+  test('the updated slide prompt targets only the requested question', () {
+    expect(defaultSlidePrompt, '可以参考课程课件进行完成，若有多道题目则仅完成我要求你回答的题目');
+    expect(
+      AppSettings.fromJson({'slidePrompt': '可以参考课程课件进行完成'}).slidePrompt,
+      defaultSlidePrompt,
+    );
+    for (final prompt in ['', '使用附件定义']) {
+      expect(AppSettings.fromJson({'slidePrompt': prompt}).slidePrompt, prompt);
+    }
+  });
   test(
     'the updated default prompt migrates without replacing custom prompts',
     () {

@@ -18,6 +18,7 @@ class YktApplication : Application() {
     private var engine: FlutterEngine? = null
     private var startupChannel: MethodChannel? = null
     private var runtimeChannel: MethodChannel? = null
+    private var classroomNotifications: ClassroomNotifications? = null
     private var foregroundVisible = false
     private var windowVisible = false
     private val exitHandler = Handler(Looper.getMainLooper())
@@ -38,6 +39,9 @@ class YktApplication : Application() {
         engine = created
         FlutterEngineCache.getInstance().put(ENGINE_ID, created)
         val messenger = created.dartExecutor.binaryMessenger
+        classroomNotifications = ClassroomNotifications(this, messenger) {
+            foregroundVisible || windowVisible
+        }
         startupChannel = MethodChannel(messenger, "ykt_helper/app_autostart").apply {
             setMethodCallHandler { call, result ->
                 try {

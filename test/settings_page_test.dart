@@ -191,6 +191,86 @@ Future<void> _type(WidgetTester tester, String key, String text) async {
 }
 
 void main() {
+  testWidgets('自动提交开启需确认，取消不保存，确认后自动保存，关闭不再确认', (tester) async {
+    final controller = _Controller(_Ai())
+      ..settings = AppSettings(autoAnswer: true);
+    await _show(tester, controller);
+    await _reveal(tester, _setting('auto-submit'));
+    await tester.tap(_setting('auto-submit'));
+    await tester.pumpAndSettle();
+    expect(find.text('确认自动提交'), findsOneWidget);
+    expect(find.textContaining('不建议开启自动提交'), findsOneWidget);
+    expect(find.textContaining('答案可能有误'), findsOneWidget);
+    expect(controller.saves, 0);
+    expect(controller.settings.autoSubmit, isFalse);
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(controller.saves, 0);
+    expect(
+      tester.widget<SwitchListTile>(_setting('auto-submit')).value,
+      isFalse,
+    );
+    await tester.tap(_setting('auto-submit'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+    await tester.pumpAndSettle();
+    expect(controller.saves, 1);
+    expect(controller.settings.autoSubmit, isTrue);
+    await tester.tap(_setting('auto-submit'));
+    await tester.pumpAndSettle();
+    expect(find.text('确认自动提交'), findsNothing);
+    expect(controller.saves, 2);
+    expect(controller.settings.autoSubmit, isFalse);
+    await _close(tester, controller);
+  });
+
+  testWidgets('确认期间其他设置变化使自动提交确认失效，不能复活开关', (tester) async {
+    final controller = _Controller(_Ai())
+      ..settings = AppSettings(autoAnswer: true);
+    await _show(tester, controller);
+    await _reveal(tester, _setting('auto-submit'));
+    final submitChange = tester
+        .widget<SwitchListTile>(_setting('auto-submit'))
+        .onChanged!;
+    await tester.tap(_setting('auto-submit'));
+    await tester.pumpAndSettle();
+    final answerChange = tester
+        .widget<SwitchListTile>(_setting('auto-answer'))
+        .onChanged!;
+    answerChange(false);
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoAnswer, isFalse);
+    expect(controller.settings.autoSubmit, isFalse);
+    expect(
+      controller.snapshots.every((snapshot) => !snapshot.autoSubmit),
+      isTrue,
+    );
+    submitChange(true);
+    await tester.pumpAndSettle();
+    expect(find.text('确认自动提交'), findsNothing);
+    await _close(tester, controller);
+  });
+
+  testWidgets('确认期间账号变更使自动提交确认失效', (tester) async {
+    final controller = _Controller(_Ai())
+      ..account = const Account(id: 'first', name: '用户一')
+      ..settings = AppSettings(autoAnswer: true);
+    await _show(tester, controller);
+    await _reveal(tester, _setting('auto-submit'));
+    await tester.tap(_setting('auto-submit'));
+    await tester.pumpAndSettle();
+    controller.account = const Account(id: 'second', name: '用户二');
+    controller.showBackgroundWarning(null);
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+    await tester.pumpAndSettle();
+    expect(controller.settings.autoSubmit, isFalse);
+    expect(controller.saves, 0);
+    await _close(tester, controller);
+  });
+
   testWidgets('位置自动签到独立开关需确认，取消不保存，关闭父项会关闭子项', (tester) async {
     final controller = _Controller(_Ai());
     await _show(tester, controller);
@@ -811,6 +891,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 601));
     await _reveal(tester, _setting('auto-submit'));
     await tester.tap(_setting('auto-submit'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
     controller.showBackgroundWarning(null);
     await tester.pump();
     expect(
@@ -1058,6 +1140,11 @@ void main() {
     ]) {
       await tester.tap(_setting(key));
       await tester.pump(const Duration(milliseconds: 20));
+      if (key == 'auto-submit') {
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
       for (final fixed in keys) {
         expect(_switchState(tester, fixed), same(states[fixed]));
         expect(tester.getRect(_setting(fixed)), rects[fixed]);

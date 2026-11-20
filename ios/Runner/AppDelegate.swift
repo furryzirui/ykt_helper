@@ -9,6 +9,8 @@ import UserNotifications
   private var permissionPending = false
   private var galleryPending = false
   private var backgroundRuntime: IOSBackgroundRuntime?
+  private var classroomNotificationEpoch = 0
+  private var classroomNotificationRevisions: [String: Int] = [:]
   private let locationPermissions = IOSLocationPermissions()
 
   override func application(
@@ -22,6 +24,13 @@ import UserNotifications
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
     backgroundRuntime = IOSBackgroundRuntime(messenger: messenger)
+    let classroomNotifications = FlutterMethodChannel(
+      name: "ykt_helper/classroom_notifications", binaryMessenger: messenger
+    )
+    classroomNotifications.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else { result(false); return }
+      self.handleClassroomNotification(call, result: result)
+    }
     let integrity = FlutterMethodChannel(
       name: "ykt_helper/integrity", binaryMessenger: messenger
     )
@@ -91,6 +100,73 @@ import UserNotifications
       return "granted"
     default:
       return "denied"
+    }
+  }
+
+  private func handleClassroomNotification(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let center = UNUserNotificationCenter.current()
+    let prefix = "ykt_classroom:"
+    switch call.method {
+    case "show":
+      guard let arguments = call.arguments as? [String: Any],
+            let key = arguments["key"] as? String, !key.isEmpty,
+            let title = arguments["title"] as? String, !title.isEmpty,
+            let body = arguments["body"] as? String,
+            let lessonId = arguments["lessonId"] as? String, !lessonId.isEmpty,
+            let problemId = arguments["problemId"] as? String, !problemId.isEmpty,
+            UIApplication.shared.applicationState == .background else {
+        result(false)
+        return
+      }
+      // The permission page owns consent and authorization. Delivery may only
+      // inspect the existing grant, including on a headless/background callback.
+      let epoch = classroomNotificationEpoch
+      let revision = classroomNotificationRevisions[key] ?? 0
+      center.getNotificationSettings { [weak self] settings in
+        guard let self = self else {
+          DispatchQueue.main.async { result(false) }
+          return
+        }
+        let allowed = self.notificationsState(settings) == "granted"
+        DispatchQueue.main.async {
+          guard allowed, UIApplication.shared.applicationState == .background,
+                epoch == self.classroomNotificationEpoch,
+                revision == (self.classroomNotificationRevisions[key] ?? 0) else {
+            result(false)
+            return
+          }
+          let content = UNMutableNotificationContent()
+          content.title = String(title.prefix(120))
+          content.body = String(body.prefix(500))
+          content.sound = .default
+          content.userInfo = ["lessonId": lessonId, "problemId": problemId]
+          let request = UNNotificationRequest(identifier: prefix + key, content: content, trigger: nil)
+          center.add(request) { error in
+            DispatchQueue.main.async { result(error == nil) }
+          }
+        }
+      }
+    case "cancel":
+      if let arguments = call.arguments as? [String: Any], let key = arguments["key"] as? String {
+        classroomNotificationRevisions[key, default: 0] += 1
+        center.removePendingNotificationRequests(withIdentifiers: [prefix + key])
+        center.removeDeliveredNotifications(withIdentifiers: [prefix + key])
+      }
+      result(nil)
+    case "cancelAll":
+      classroomNotificationEpoch += 1
+      classroomNotificationRevisions.removeAll()
+      center.getPendingNotificationRequests { requests in
+        center.removePendingNotificationRequests(withIdentifiers:
+          requests.map { $0.identifier }.filter { $0.hasPrefix(prefix) })
+      }
+      center.getDeliveredNotifications { notifications in
+        center.removeDeliveredNotifications(withIdentifiers:
+          notifications.map { $0.request.identifier }.filter { $0.hasPrefix(prefix) })
+      }
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
     }
   }
 

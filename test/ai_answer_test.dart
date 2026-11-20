@@ -129,7 +129,7 @@ void main() {
       AiAnswerService.prompt(q, false),
       '请使用最简洁的回答完成这道题，不要使用markdown：题目\nA. 甲\nB. 乙\nC. 丙',
     );
-    expect(AiAnswerService.prompt(q, true).endsWith('可以参考课程课件进行完成'), true);
+    expect(AiAnswerService.prompt(q, true).endsWith(defaultSlidePrompt), true);
   });
   test('custom prompts replace the question token or append the question', () {
     expect(
@@ -138,7 +138,7 @@ void main() {
     );
     expect(
       AiAnswerService.prompt(q, true, template: '用中文回答'),
-      '用中文回答\n${q.promptText}\n可以参考课程课件进行完成',
+      '用中文回答\n${q.promptText}\n$defaultSlidePrompt',
     );
     expect(
       AiAnswerService.prompt(q, false, template: ' '),
@@ -406,7 +406,7 @@ void main() {
       );
       expect(
         object(content.first)['text'],
-        '简洁作答：${q.promptText}\n可以参考课程课件进行完成',
+        '简洁作答：${q.promptText}\n$defaultSlidePrompt',
       );
       expect(
         object(object(content[1])['image_url'])['url'],

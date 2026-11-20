@@ -283,7 +283,7 @@ enum BackgroundServiceMode { native, silentAudio, pictureInPicture, location }
 const serviceTimeoutOptions = [0, 10, 120, 1440];
 
 const defaultAiPrompt = '请使用最简洁的回答完成这道题，不要使用markdown：{question}';
-const defaultSlidePrompt = '可以参考课程课件进行完成';
+const defaultSlidePrompt = '可以参考课程课件进行完成，若有多道题目则仅完成我要求你回答的题目';
 const defaultFixedSingleAnswer = 'A';
 const defaultFixedMultipleAnswer = 'AB';
 const defaultFixedJudgmentAnswer = 'A';
@@ -445,7 +445,9 @@ class AppSettings {
               : str(json['customPrompt'])
         : defaultAiPrompt,
     slidePrompt: json.containsKey('slidePrompt')
-        ? str(json['slidePrompt'])
+        ? json['slidePrompt'] == '可以参考课程课件进行完成'
+              ? defaultSlidePrompt
+              : str(json['slidePrompt'])
         : defaultSlidePrompt,
     slideScope: SlideScope.values.firstWhere(
       (e) => e.name == json['slideScope'],
