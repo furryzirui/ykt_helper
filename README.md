@@ -2,7 +2,7 @@
 
 普通版雨课堂辅助工具，支持 Android、Windows 和 iOS。
 
-**稳定版 1.1** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/latest) · [GPL-3.0](LICENSE)
+**稳定版 1.1.1** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/latest) · [GPL-3.0](LICENSE)
 
 ## 功能
 
@@ -24,7 +24,7 @@ Android 8.0+ 推荐选择较小的 `arm64-v8a.apk`，其他架构选择 `univers
 
 AI 使用 OpenAI 兼容服务，填写 `base_url`、`api_key` 后选择模型；发送图片需使用支持图像输入的模型。
 
-仅适配 `www.yuketang.cn` 普通版。位置签到使用服务端中心坐标；自动位置签到在开启时确认，手动签到逐次确认。
+仅适配 `www.yuketang.cn` 普通版。自动签到包含位置签到，开启时确认使用服务端中心坐标，手动签到逐次确认。详细日志包含题目、AI 回复和本人答案，导出前请确认分享范围。
 
 ## 构建
 
@@ -37,7 +37,7 @@ flutter test
 flutter build apk --release
 ```
 
-各平台构建及签名见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification-1.1.md)。请勿提交账号凭证或签名私钥。
+各平台构建及签名见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification-1.1.1.md)。请勿提交账号凭证或签名私钥。
 
 ## 许可证
 

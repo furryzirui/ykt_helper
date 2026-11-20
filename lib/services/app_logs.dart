@@ -44,6 +44,7 @@ class AppLogEntry {
   final int? code, count;
   final String? detail, error;
   final Map<String, Object?> context;
+  final Map<String, String> content;
   final int? elapsedMs;
   const AppLogEntry({
     required this.time,
@@ -54,6 +55,7 @@ class AppLogEntry {
     this.detail,
     this.error,
     this.context = const {},
+    this.content = const {},
     this.elapsedMs,
   });
 
@@ -71,6 +73,8 @@ class AppLogEntry {
       '${entry.key}：${entry.value}',
     if (_LogPrivacy.text(detail) case final String value) '详情：$value',
     if (_LogPrivacy.text(error) case final String value) '原因：$value',
+    for (final entry in _LogPrivacy.content(content).entries)
+      '${_LogPrivacy.contentLabel(entry.key)}：\n${entry.value}',
   ].join('\n');
 
   Map<String, Object?> toJson() => {
@@ -82,6 +86,7 @@ class AppLogEntry {
     if (_LogPrivacy.text(detail) case final String value) 'detail': value,
     if (_LogPrivacy.text(error) case final String value) 'error': value,
     if (context.isNotEmpty) 'context': _LogPrivacy.context(context),
+    if (content.isNotEmpty) 'content': _LogPrivacy.content(content),
     if (elapsedMs != null) 'elapsedMs': elapsedMs,
   };
 
@@ -92,6 +97,11 @@ class AppLogEntry {
         .firstOrNull;
     final time = DateTime.tryParse(raw['time'] is String ? raw['time'] : '');
     if (event == null || time == null) return null;
+    if (event == AppLogEvent.automatic &&
+        raw['context'] is Map &&
+        (raw['context'] as Map)['phase'] == 'generationSkip') {
+      return null;
+    }
     return AppLogEntry(
       event: event,
       time: time.toLocal(),
@@ -101,6 +111,7 @@ class AppLogEntry {
       detail: _LogPrivacy.text(raw['detail']),
       error: _LogPrivacy.text(raw['error']),
       context: _LogPrivacy.context(raw['context']),
+      content: _LogPrivacy.content(raw['content']),
       elapsedMs: raw['elapsedMs'] is int && raw['elapsedMs'] >= 0
           ? raw['elapsedMs']
           : null,
@@ -109,6 +120,91 @@ class AppLogEntry {
 }
 
 class _LogPrivacy {
+  static const _contentKeys = {
+    'question',
+    'aiResponse',
+    'answerSync',
+    'answer',
+  };
+  static const contentLimit = 8000;
+  static String contentLabel(String key) => switch (key) {
+    'question' => '题干与选项',
+    'aiResponse' => 'AI 原始回复',
+    'answerSync' => '同步本人答案',
+    'answer' => '答案内容',
+    _ => key,
+  };
+
+  static final _credentialAssignment = RegExp(
+    r'''(["']?(?:authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|sessionid|csrftoken)["']?\s*[:=：]\s*)(?:\[凭证已隐藏\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n}\]]+)''',
+    caseSensitive: false,
+  );
+
+  static String _contentText(String raw) {
+    final value = raw
+        .replaceAll(
+          RegExp(
+            r'data:(?:image|audio|video)/[^\s"\x27<>]+',
+            caseSensitive: false,
+          ),
+          '[媒体数据已隐藏]',
+        )
+        .replaceAll(
+          RegExp(r'https?://[^\s<>"\x27)]+', caseSensitive: false),
+          '[地址已隐藏]',
+        )
+        .replaceAll(
+          RegExp(
+            r'''^\s*(?:authorization|cookie|set-cookie)\s*[:=：].*$''',
+            caseSensitive: false,
+            multiLine: true,
+          ),
+          '[认证头已隐藏]',
+        )
+        .replaceAll(
+          RegExp(r'Bearer\s+[^\s,"\x27;\]}]+', caseSensitive: false),
+          'Bearer [已隐藏]',
+        )
+        .replaceAllMapped(
+          _credentialAssignment,
+          (match) => '${match[1]}[凭证已隐藏]',
+        )
+        .replaceAll(
+          RegExp(r'(?:sk-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]+'),
+          '[密钥已隐藏]',
+        )
+        .replaceAll(
+          RegExp(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'),
+          '[令牌已隐藏]',
+        )
+        .replaceAll(RegExp(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'), '');
+    return value;
+  }
+
+  /// Content is deliberately separate from operation detail: questions and
+  /// JSON/Markdown answers are retained only through these explicit keys.
+  static Map<String, String> content(Object? raw) {
+    if (raw is! Map) return const {};
+    final result = <String, String>{};
+    var remaining = contentLimit;
+    for (final entry in raw.entries) {
+      if (!_contentKeys.contains(entry.key) || entry.value is! String) continue;
+      final value = _contentText(entry.value as String);
+      if (value.isEmpty) continue;
+      if (remaining <= 0) {
+        result[entry.key as String] = '[内容已截断]';
+      } else if (value.length > remaining) {
+        result[entry.key as String] =
+            '${value.substring(0, remaining)}\n[内容已截断]';
+        remaining = 0;
+      } else {
+        result[entry.key as String] = value;
+        remaining -= value.length;
+      }
+    }
+    return Map.unmodifiable(result);
+  }
+
   static const _contextKeys = {
     'phase',
     'method',
@@ -239,8 +335,8 @@ class _LogPrivacy {
   }
 }
 
-/// Bounded diagnostics. Callers provide static explanations and allowlisted
-/// identifiers only, never question text, personal answers or raw request data.
+/// Bounded diagnostics. Authorized classroom content uses the separate content
+/// allowlist; credentials, headers and raw request/response bodies are excluded.
 /// Imported records pass through the same privacy filter before persistence.
 class AppLogs extends ChangeNotifier {
   static const maxEntries = 1000;
@@ -282,6 +378,16 @@ class AppLogs extends ChangeNotifier {
     return _LogPrivacy.text(safe);
   }
 
+  String _privateContent(String value) {
+    var safe = value;
+    final secrets = _protectedSecrets.toList()
+      ..sort((first, second) => second.length.compareTo(first.length));
+    for (final secret in secrets) {
+      safe = safe.replaceAll(secret, '[凭证已隐藏]');
+    }
+    return safe;
+  }
+
   AppLogEntry _protectEntry(AppLogEntry entry) => AppLogEntry(
     time: entry.time,
     event: entry.event,
@@ -296,6 +402,10 @@ class AppLogs extends ChangeNotifier {
             ? _privateText(item.value as String)
             : item.value,
     }),
+    content: _LogPrivacy.content({
+      for (final item in entry.content.entries)
+        item.key: _privateContent(item.value),
+    }),
     elapsedMs: entry.elapsedMs,
   );
 
@@ -306,7 +416,7 @@ class AppLogs extends ChangeNotifier {
       final saved = <AppLogEntry>[];
       if (await file.exists()) {
         // Avoid reading an accidentally oversized or replaced file into memory.
-        if (await file.length() <= 16 * 1024 * 1024) {
+        if (await file.length() <= 64 * 1024 * 1024) {
           for (final line in await file.readAsLines()) {
             try {
               final entry = AppLogEntry.parse(jsonDecode(line));
@@ -341,6 +451,7 @@ class AppLogs extends ChangeNotifier {
     String? detail,
     Object? error,
     Map<String, Object?> context = const {},
+    Map<String, String> content = const {},
     Duration? elapsed,
   }) {
     if (_disposed) return;
@@ -355,6 +466,7 @@ class AppLogs extends ChangeNotifier {
           detail: _LogPrivacy.text(detail),
           error: _LogPrivacy.failure(error),
           context: _LogPrivacy.context(context),
+          content: _LogPrivacy.content(content),
           elapsedMs: elapsed?.inMilliseconds,
         ),
       ),
@@ -401,7 +513,7 @@ class AppLogs extends ChangeNotifier {
   String document() => [
     'ykt_helper 应用日志',
     '导出时间：${DateTime.now().toLocal().toIso8601String()}',
-    '记录操作阶段、耗时、错误原因和课堂/题目标识；不记录账号、凭证、题目正文、个人答案或请求体。分享前请确认其中标识信息。',
+    '包含操作阶段、耗时、错误原因、题干选项、AI 原始回复及本人答案；凭证与媒体数据已过滤。分享前请确认课堂内容与答案隐私。',
     '',
     for (final entry in _entries) '${entry.detailText}\n',
   ].join('\n');

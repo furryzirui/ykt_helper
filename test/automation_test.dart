@@ -61,7 +61,9 @@ class NoAutostart extends AppAutostart {
 class FakeRain extends RainApi {
   int checkins = 0, submissions = 0;
   int answerReads = 0;
+  final presentationReads = <String>[];
   final answerSessions = <ClassroomSession?>[];
+  final answerPresentationIds = <String>[];
   final submittedAnswers = <dynamic>[];
   final submittedIds = <String>[];
   final submittedTimes = <DateTime>[];
@@ -104,7 +106,31 @@ class FakeRain extends RainApi {
     String presentationId, {
     ClassroomSession? session,
     bool withAnswers = true,
-  }) async => pendingPresentation?.future ?? decks[presentationId]!;
+  }) async {
+    presentationReads.add(presentationId);
+    if (pendingPresentation != null) return pendingPresentation!.future;
+    final deck = decks[presentationId]!;
+    return Presentation(
+      id: deck.id,
+      title: deck.title,
+      slides: [
+        for (final slide in deck.slides)
+          Slide(
+            id: slide.id,
+            index: slide.index,
+            imageUrl: slide.imageUrl,
+            text: slide.text,
+            question: slide.question,
+            ownAnswer: withAnswers
+                ? remote[slide.question?.id] ?? slide.ownAnswer
+                : null,
+          ),
+      ],
+      answersKnown: withAnswers && !failSync && pendingAnswers == null,
+      answerError: failSync ? 'test embedded sync unavailable' : null,
+    );
+  }
+
   @override
   Future<Map<String, AnswerRecord>> ownAnswers(
     String lessonId,
@@ -113,6 +139,7 @@ class FakeRain extends RainApi {
   }) async {
     answerReads++;
     answerSessions.add(session);
+    answerPresentationIds.add(presentationId);
     if (failSync) throw const ApiFailure('test sync unavailable');
     return pendingAnswers?.future ?? remote;
   }
@@ -398,7 +425,7 @@ void main() {
   );
 
   testWidgets(
-    'manual success during an automatic prelookup postpones that automatic POST',
+    'automatic POST has no preflight and waits for one post-submit answer sync',
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
@@ -406,19 +433,24 @@ void main() {
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
-      api.pendingAnswers = Completer();
+      final reads = api.answerReads;
+      api.pendingSubmit = Completer<void>();
       await tester.pump(const Duration(seconds: 5));
-      expect(api.submissions, 0);
-      await controller.submitAnswer(live, live.questions['q2']!, ['C']);
+      expect(api.submittedIds, ['q']);
+      expect(api.answerReads, reads);
+      api.pendingAnswers = Completer();
+      api.pendingSubmit!.complete();
+      api.pendingSubmit = null;
+      await tester.pump();
+      expect(api.answerReads, reads + 1);
+      expect(live.autoStates['q'], '答案已提交');
       api.pendingAnswers!.complete({});
       api.pendingAnswers = null;
       await tester.pump();
-      expect(api.submittedIds, ['q2']);
-      await tester.pump(const Duration(seconds: 4));
-      expect(api.submittedIds, ['q2']);
-      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 5));
       await tester.pump();
-      expect(api.submittedIds, ['q2', 'q']);
+      expect(api.submittedIds, ['q', 'q2']);
+      expect(api.answerReads, reads + 2);
     },
   );
 
@@ -608,6 +640,95 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
     expect(api.submissions, 1);
+  });
+
+  test(
+    'entry and repeated classroom events reuse embedded results without answer requests',
+    () async {
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      expect(api.presentationReads, ['p']);
+      expect(api.answerReads, 0);
+      expect(live.answersKnown, isTrue);
+      await controller.processEvent(live, hello());
+      await controller.processEvent(live, {
+        'op': 'showpresentation',
+        'presentation': 'p',
+      });
+      await controller.processEvent(live, unlock());
+      await controller.processEvent(live, {
+        'op': 'fetchtimeline',
+        'timeline': [],
+      });
+      await controller.processEvent(live, {
+        'op': 'problemfinished',
+        'prob': 'q',
+      });
+      await controller.refresh();
+      await controller.processEvent(live, {'op': 'lessonfinished'});
+      await Future<void>.delayed(Duration.zero);
+      expect(api.presentationReads, ['p']);
+      expect(api.answerReads, 0);
+    },
+  );
+
+  test(
+    'one successful submission reads only its own deck once and refresh avoids a duplicate current fetch',
+    () async {
+      api.decks['next'] = const Presentation(
+        id: 'next',
+        title: 'next',
+        slides: [
+          Slide(
+            id: 's-next',
+            index: 0,
+            imageUrl: '',
+            question: Question(
+              id: 'next-q',
+              body: 'next-q',
+              type: 1,
+              options: {'A': '甲', 'B': '乙', 'C': '丙'},
+            ),
+          ),
+        ],
+      );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.processEvent(live, {
+        'op': 'showpresentation',
+        'presentation': 'next',
+      });
+      expect(api.presentationReads, ['p', 'next']);
+      expect(api.answerReads, 0);
+      await controller.processEvent(live, unlock(id: 'next-q'));
+      await controller.submitAnswer(live, live.questions['next-q']!, ['B']);
+      expect(api.answerPresentationIds, ['next']);
+      expect(api.submissions, 1);
+      await controller.refreshClassroom(live);
+      expect(api.presentationReads, ['p', 'next', 'next']);
+      expect(api.answerPresentationIds, ['next', 'p']);
+    },
+  );
+
+  test('submitted questions produce no skipped-generation entries', () async {
+    api.remote = {
+      'q': const AnswerRecord(
+        problemId: 'q',
+        answer: ['B'],
+        source: AnswerSource.server,
+      ),
+    };
+    controller.settings = AppSettings(autoAnswer: true);
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await controller.processEvent(live, unlock());
+    expect(
+      controller.logs.entries.any(
+        (entry) => entry.context['phase'] == 'generationSkip',
+      ),
+      isFalse,
+    );
+    expect(live.autoStates['q'], '答案已提交');
   });
 
   testWidgets(
@@ -1642,7 +1763,7 @@ void main() {
   );
 
   testWidgets(
-    'final automatic preflight uses the live session and respects an answer submitted from another device',
+    'post-submit synchronization uses the live session without a preflight request',
     (tester) async {
       resetForWidgetTest();
       controller.settings = AppSettings(
@@ -1675,7 +1796,7 @@ void main() {
       );
       expect(live.answers['q']!.answer, ['B']);
       expect(live.draftAnswers.containsKey('q'), false);
-      expect(api.submissions, 0);
+      expect(api.submissions, 1);
     },
   );
 
@@ -1853,25 +1974,30 @@ void main() {
     expect(controller.classrooms, isEmpty);
   });
 
-  testWidgets('remote answers are checked again after the delay', (
-    tester,
-  ) async {
-    final live = await prepareDelayed(tester);
-    final reads = api.answerReads;
-    api.remote = {
-      'q': const AnswerRecord(
-        problemId: 'q',
-        answer: ['B'],
-        source: AnswerSource.server,
-      ),
-    };
-    await tester.pump(const Duration(seconds: 30));
-    await tester.pump();
-    expect(api.answerReads, greaterThan(reads));
-    expect(api.submissions, 0);
-    expect(live.answers['q']!.answer, ['B']);
-    expect(live.draftAnswers, isEmpty);
-  });
+  testWidgets(
+    'answer lookup runs once after successful automatic POST and never before it',
+    (tester) async {
+      final live = await prepareDelayed(tester);
+      final reads = api.answerReads;
+      api.pendingSubmit = Completer<void>();
+      await tester.pump(const Duration(seconds: 30));
+      expect(api.submissions, 1);
+      expect(api.answerReads, reads);
+      api.remote = {
+        'q': const AnswerRecord(
+          problemId: 'q',
+          answer: ['B'],
+          source: AnswerSource.server,
+        ),
+      };
+      api.pendingSubmit!.complete();
+      api.pendingSubmit = null;
+      await tester.pump();
+      expect(api.answerReads, reads + 1);
+      expect(live.answers['q']!.answer, ['B']);
+      expect(live.draftAnswers, isEmpty);
+    },
+  );
 
   testWidgets(
     'edits replace the queued automatic answer with the latest draft',
@@ -1900,38 +2026,21 @@ void main() {
     ]);
   });
 
-  testWidgets('a cancelled final lookup cannot replace a newer manual answer', (
-    tester,
-  ) async {
-    final live = await prepareDelayed(tester);
-    api.pendingAnswers = Completer();
-    await tester.pump(const Duration(seconds: 30));
-    await controller.submitAnswer(live, live.questions['q']!, ['B']);
-    api.pendingAnswers!.complete({
-      'q': const AnswerRecord(
-        problemId: 'q',
-        answer: ['A'],
-        source: AnswerSource.server,
-      ),
-    });
-    await tester.pump();
-    expect(api.submissions, 1);
-    expect(live.answers['q']!.answer, ['B']);
-    expect(live.answers['q']!.source, AnswerSource.local);
-  });
-
   testWidgets(
-    'a cancelled final lookup failure cannot overwrite manual draft status',
+    'failed post-submit lookup preserves successful submission and never retries POST',
     (tester) async {
       final live = await prepareDelayed(tester);
-      api.pendingAnswers = Completer();
-      await tester.pump(const Duration(seconds: 30));
-      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
-      api.pendingAnswers!.completeError(const ApiFailure('late query failure'));
-      await tester.pump();
-      expect(api.submissions, 0);
-      expect(live.draftAnswers['q'], ['B']);
-      expect(live.autoStates['q'], contains('秒后自动提交'));
+      final reads = api.answerReads;
+      api.failSync = true;
+      await controller.submitAnswer(live, live.questions['q']!, ['B']);
+      expect(api.submissions, 1);
+      expect(api.answerReads, reads + 1);
+      expect(live.answers['q']!.answer, ['B']);
+      expect(live.autoStates['q'], '答案已提交');
+      expect(live.answerSyncError, contains('test sync unavailable'));
+      await tester.pump(const Duration(seconds: 31));
+      expect(api.submissions, 1);
+      expect(api.answerReads, reads + 1);
     },
   );
 
@@ -2050,20 +2159,17 @@ void main() {
   );
 
   testWidgets(
-    'closing or editing while final answer check waits prevents POST',
+    'closing a question before its timer prevents both POST and answer lookup',
     (tester) async {
       final live = await prepareDelayed(tester);
-      api.pendingAnswers = Completer();
-      await tester.pump(const Duration(seconds: 30));
-      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+      final reads = api.answerReads;
       await controller.processEvent(live, {
         'op': 'problemfinished',
         'prob': 'q',
       });
-      api.pendingAnswers!.complete({});
-      await tester.pump();
+      await tester.pump(const Duration(seconds: 31));
       expect(api.submissions, 0);
-      expect(live.draftAnswers['q'], ['B']);
+      expect(api.answerReads, reads);
     },
   );
 

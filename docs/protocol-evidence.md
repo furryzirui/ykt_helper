@@ -55,7 +55,7 @@ course_helper `lib/api/login.dart`、`lib/api/course.dart` 与 ykt_assistant `do
 
 2026-11-20 重新读取公开普通版直播入口，仍为 `lesson/3.3.241`。`fullscreen.b2d05c0f1c969680f5d5.js` 的 `/v3/:lessonID` 路由加载 `12.7a3c38d7e231e5b9793c.js`；其 `getPresentation` 用课堂 Bearer 调用 `GET /api/v3/lesson/presentation/fetch?presentation_id=<id>`。直播 `addProblem` 直接以 `slide.problem.result` 的真值决定已完成，主观题组件 `16.89f06c9fa277deceeb6f.js` 将 `this.oProblem.result` 原样用于本人结果展示；这里的 `result` 本身是选项/填空数组或主观对象，不是课后摘要的 `{score,answer}` 包装，也不依赖已批分。`null` 表示未提交，JavaScript 的空数组、空对象仍是真值，不能仅因容器为空就重判未作答。未提供 `result` 字段、结构错误或归属不符仍报告未知；不会从题目标准答案字段补齐。
 
-1.1.1 的实时答案同步、手动刷新和自动提交前最后复查均改用当前课堂会话的上述直播端点；只有历史读取沿用 summary/报告。类型 1/2/3/4/6 要求数组，类型 5 要求对象，来源标记为服务端；直播 `problem.score` 是题目满分，不冒充个人得分。以上核对使用公开官方脚本，未访问用户账号或真实课堂响应；跨设备最终返回情况仍需新测试包联调。
+1.1.1 的实时答案读取使用当前课堂会话的上述直播端点；只有历史读取沿用 summary/报告。最终按用户要求，进入及新课件加载时复用课件响应的本人结果，成功提交后读取该课件一次，另保留用户主动刷新；周期轮询、课堂事件与自动提交前不再额外查询答案。类型 1/2/3/4/6 要求数组，类型 5 要求对象，来源标记为服务端；直播 `problem.score` 是题目满分，不冒充个人得分。以上核对使用公开官方脚本，未访问用户账号或真实课堂响应；真实课堂返回仍以用户测试为准。
 
 官方 `25711.629d13aa.js` 的个人题目详情请求：
 

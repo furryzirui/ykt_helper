@@ -61,7 +61,8 @@ class LiveClass {
   final Map<String, String> autoStates = {};
   final Set<String> submitting = {}, automaticAttempts = {};
   final Map<String, Object> _automaticAnswerFlights = {};
-  final Map<String, String> _automaticSkipReasons = {};
+  Future<void> _postSubmitAnswerSync = Future<void>.value();
+  final Map<String, bool> _presentationAnswersKnown = {};
   final Map<String, Json> launches = {};
   final Map<String, int> closedAtSequence = {};
   int eventSequence = 0;
@@ -388,7 +389,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       live._questionTimingTimers.clear();
       // A queued pre-suspension timer must not submit before the server state
       // has been read again. Timeline replay determines current active tasks.
-      live.answersKnown = false;
       live.activeProblemIds.clear();
       live.awaitingTimeline = connectSockets;
       await live.connection?.reconnect();
@@ -397,7 +397,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
           !_valid(live)) {
         return;
       }
-      await syncAnswers(live);
       unawaited(syncAttendance(live));
     }
     if (_automaticAllowed && revision == _lifecycleRevision) {
@@ -735,7 +734,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         for (final live in List.of(classrooms.values)) {
           if (!live.ended) {
             unawaited(syncAttendance(live));
-            if (!live.syncingAnswers) await syncAnswers(live);
           }
         }
       });
@@ -1415,7 +1413,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
             live.connectionLabel = '课堂已结束';
             _invalidateLocation(live, keepSigned: true);
             unawaited(live.connection?.close() ?? Future.value());
-            unawaited(syncAnswers(live));
             unawaited(_updateBackground());
             _notify();
           }
@@ -1511,7 +1508,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       live.connectionLabel = '课堂已结束';
       _invalidateLocation(live, keepSigned: true);
       await live.connection?.close();
-      unawaited(syncAnswers(live));
       await _updateBackground();
       _notify();
       return;
@@ -1551,7 +1547,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
       if (op == 'hello') live.awaitingTimeline = false;
-      unawaited(syncAnswers(live));
     } else if (op == 'slide' || op == 'slidenav') {
       final index =
           integer(
@@ -1569,7 +1564,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         epoch: eventEpoch,
       );
       if (!current()) return;
-      unawaited(syncAnswers(live));
     } else if (op == 'problemfinished') {
       _closeProblem(live, str(event['prob']), sequence);
     } else if (op == 'probleminfo') {
@@ -1593,7 +1587,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
       live.awaitingTimeline = false;
-      unawaited(syncAnswers(live));
     } else if (op == 'presentationupdated' || op == 'presentationcreated') {
       final id = str(event['presentation']);
       if (id.isNotEmpty) {
@@ -1625,7 +1618,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         if (!_valid(live) || eventEpoch != _automationEpoch) return;
         if (current) selectSlide(live, page, fromTeacher: live.followTeacher);
         live.connection?.requestTimeline();
-        unawaited(syncAnswers(live));
       }
     } else if (op == 'extendtime') {
       final data = object(event['problem']);
@@ -1672,7 +1664,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         live.lesson.id,
         id,
         session: live.session,
-        withAnswers: false,
+        withAnswers: true,
       );
       if (!_valid(live) || eventEpoch != _automationEpoch) return;
       logs.add(
@@ -1698,6 +1690,56 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         },
       );
       live.presentations[id] = presentation;
+      live._presentationAnswersKnown[id] = presentation.answersKnown;
+      final embeddedAnswers = <String, AnswerRecord>{
+        for (final slide in presentation.slides)
+          if (slide.question != null && slide.ownAnswer != null)
+            slide.question!.id: slide.ownAnswer!,
+      };
+      live.answers.addAll(embeddedAnswers);
+      _observeSubmittedAnswers(live, embeddedAnswers.values);
+      live.answersKnown = live.presentations.keys.every(
+        (key) => live._presentationAnswersKnown[key] == true,
+      );
+      if (live.answersKnown) live._automaticSubmissionUncertain = false;
+      live.answerSyncError = presentation.answerError;
+      for (final answerId in embeddedAnswers.keys) {
+        live.draftAnswers.remove(answerId);
+        _cancelAutomaticSubmission(live, answerId);
+        live.autoStates[answerId] = '答案已提交';
+      }
+      logs.add(
+        AppLogEvent.answers,
+        success: presentation.answersKnown,
+        error: presentation.answerError,
+        detail: '读取课件中的本人答案',
+        context: {
+          'phase': 'embeddedPresentationResults',
+          'lessonId': live.lesson.id,
+          'presentationId': id,
+        },
+        content: {
+          'answerSync': jsonEncode(
+            embeddedAnswers.map((key, value) => MapEntry(key, value.answer)),
+          ),
+        },
+      );
+      if (embeddedAnswers.isNotEmpty) {
+        try {
+          await _persistAnswers(live);
+        } catch (failure) {
+          logs.add(
+            AppLogEvent.answers,
+            success: false,
+            error: failure,
+            context: {
+              'phase': 'persistEmbeddedResults',
+              'lessonId': live.lesson.id,
+              'presentationId': id,
+            },
+          );
+        }
+      }
       for (final slide in presentation.slides) {
         if (slide.question != null) {
           var question = slide.question!;
@@ -1742,7 +1784,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (activate && live.presentationId != id) {
       live.presentationId = id;
       live.slideIndex = 0;
-      live.answersKnown = false;
     }
     // Preparation is independent of the teacher's publish event and of the
     // personal-answer lookup; only submitting requires those confirmations.
@@ -2020,13 +2061,66 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     _notify();
   }
 
-  Future<void> syncAnswers(LiveClass live) {
-    return live.answerSync ??= _syncAnswers(live).whenComplete(() {
-      live.answerSync = null;
-    });
+  Future<void> syncAnswers(
+    LiveClass live, {
+    Set<String> skipPresentations = const {},
+  }) {
+    return live.answerSync ??=
+        _syncAnswers(live, skipPresentations: skipPresentations).whenComplete(
+          () {
+            live.answerSync = null;
+          },
+        );
   }
 
-  Future<void> _syncAnswers(LiveClass live) async {
+  Future<void> _syncAfterSuccessfulSubmission(
+    LiveClass live,
+    Question question,
+  ) {
+    final target = live.presentations.entries
+        .where(
+          (entry) => entry.value.slides.any(
+            (slide) => slide.question?.id == question.id,
+          ),
+        )
+        .firstOrNull
+        ?.key;
+    final operation = live._postSubmitAnswerSync.catchError((Object _) {}).then(
+      (_) async {
+        if (!_valid(live)) return;
+        await live.answerSync;
+        if (_valid(live) && target != null) {
+          await syncAnswers(
+            live,
+            skipPresentations: live.presentations.keys
+                .where((id) => id != target)
+                .toSet(),
+          );
+        }
+      },
+    );
+    live._postSubmitAnswerSync = operation.catchError((Object failure) {
+      if (_valid(live)) {
+        live.answerSyncError = '提交已成功，答案同步失败，请手动刷新';
+        logs.add(
+          AppLogEvent.answers,
+          success: false,
+          error: failure,
+          context: {
+            'phase': 'afterSuccessfulSubmission',
+            'lessonId': live.lesson.id,
+          },
+        );
+        _notify();
+      }
+    });
+    return live._postSubmitAnswerSync;
+  }
+
+  Future<void> _syncAnswers(
+    LiveClass live, {
+    Set<String> skipPresentations = const {},
+  }) async {
     if (!_valid(live) || live.syncingAnswers || live.presentations.isEmpty) {
       return;
     }
@@ -2037,9 +2131,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     var known = true;
     final failures = <String>[];
     final queried = <String>{};
+    final receivedAnswers = <String, AnswerRecord>{};
     while (_valid(live)) {
       final pending = live.presentations.keys
-          .where((id) => !queried.contains(id))
+          .where(
+            (id) => !queried.contains(id) && !skipPresentations.contains(id),
+          )
           .toList();
       if (pending.isEmpty) break;
       for (final id in pending) {
@@ -2052,8 +2149,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
           );
           if (!_valid(live)) return;
           live.answers.addAll(answers);
+          receivedAnswers.addAll(answers);
+          live._presentationAnswersKnown[id] = true;
         } catch (failure) {
           known = false;
+          live._presentationAnswersKnown[id] = false;
           failures.add(failure.toString());
           logs.add(
             AppLogEvent.answers,
@@ -2069,16 +2169,24 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
     if (!_valid(live)) return;
+    known = live.presentations.keys.every(
+      (id) => live._presentationAnswersKnown[id] == true,
+    );
     live.answersKnown = known;
     if (known) live._automaticSubmissionUncertain = false;
     live.syncingAnswers = false;
     live.answerSyncError = failures.isEmpty ? null : failures.join('\n');
-    if (known) {
+    if (queried.isNotEmpty) {
       logs.add(
         AppLogEvent.answers,
-        success: true,
+        success: failures.isEmpty,
         elapsed: watch.elapsed,
-        count: live.answers.length,
+        count: receivedAnswers.length,
+        content: {
+          'answerSync': jsonEncode(
+            receivedAnswers.map((key, value) => MapEntry(key, value.answer)),
+          ),
+        },
         context: {
           'phase': 'syncedLiveResults',
           'lessonId': live.lesson.id,
@@ -2131,6 +2239,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       logs.add(
         AppLogEvent.submit,
         success: true,
+        content: {'question': latest.promptText, 'answer': jsonEncode(answer)},
         elapsed: watch.elapsed,
         context: {
           'phase': 'posted',
@@ -2191,6 +2300,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       _driveAutomaticQueue(live);
       _notify();
     }
+    await _syncAfterSuccessfulSubmission(live, latest);
   }
 
   void _cancelAutomaticSubmission(
@@ -2417,27 +2527,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         }
         return;
       }
-      // Waiting gives other clients time to submit; query again just before POST.
-      final deck = live.presentations.values
-          .where((deck) => deck.slides.any((slide) => slide.question?.id == id))
-          .firstOrNull;
-      if (deck != null) {
-        final remote = await api.ownAnswers(
-          live.lesson.id,
-          deck.id,
-          session: live.session,
-        );
-        if (!_automaticSubmissionValid(live, job)) return;
-        live.answers.addAll(remote);
-        _observeSubmittedAnswers(live, remote.values);
-        if (live.answers.containsKey(id)) {
-          live.draftAnswers.remove(id);
-          live._questionTimingTimers.remove(id)?.cancel();
-          live.autoStates[id] = '答案已提交';
-          await _persistAnswers(live);
-          return;
-        }
-      }
       final latest = live.questions[id] ?? job.question;
       if (live.submitting.isNotEmpty ||
           _automaticDue(live, latest).isAfter(now())) {
@@ -2579,16 +2668,10 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     for (final question in List.of(live.questions.values)) {
       final id = question.id;
       if (live.answers.containsKey(id) || _questionEnded(live, question)) {
-        _logAutomaticSkip(
-          live,
-          question,
-          live.answers.containsKey(id) ? 'alreadySubmitted' : 'questionEnded',
-        );
         live.autoStates[id] = answerStatus(live, question);
         continue;
       }
       if (live._editedDrafts.contains(id)) {
-        _logAutomaticSkip(live, question, 'manualDraft');
         _maybeSubmitPreparedDraft(live, question);
         continue;
       }
@@ -2606,7 +2689,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       // Start each loaded question independently of other provider responses.
       final attempt = '$id:$version:$settingsSnapshot';
       if (!live.automaticAttempts.add(attempt)) continue;
-      live._automaticSkipReasons.remove(id);
       final flight = Object();
       live._automaticAnswerFlights[id] = flight;
       unawaited(
@@ -2688,6 +2770,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       logs.add(
         AppLogEvent.automatic,
         detail: '开始生成答案',
+        content: {'question': question.promptText},
         context: {...context, 'phase': 'generationStart'},
       );
       var result = fixed ?? '';
@@ -2711,6 +2794,14 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
             snapshot.slideScope,
           ),
           loadImage: loadImage,
+        );
+        logs.add(
+          AppLogEvent.automatic,
+          success: true,
+          detail: '收到 AI 原始回复',
+          content: {'aiResponse': result},
+          context: {...context, 'phase': 'generationResponse'},
+          elapsed: elapsed.elapsed,
         );
       }
       final invalid = invalidReason();
@@ -2776,6 +2867,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         AppLogEvent.draft,
         success: true,
         detail: '答案已写入草稿',
+        content: {'answer': jsonEncode(parsed)},
         context: {...context, 'phase': 'draftFilled'},
         elapsed: elapsed.elapsed,
       );
@@ -2808,22 +2900,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         _notify();
       }
     }
-  }
-
-  void _logAutomaticSkip(LiveClass live, Question question, String reason) {
-    if (live._automaticSkipReasons[question.id] == reason) return;
-    live._automaticSkipReasons[question.id] = reason;
-    logs.add(
-      AppLogEvent.automatic,
-      detail: '跳过自动生成',
-      context: {
-        'phase': 'generationSkip',
-        'lessonId': live.lesson.id,
-        'problemId': question.id,
-        'questionType': question.type,
-        'reason': reason,
-      },
-    );
   }
 
   String _automaticAnswerSettings(AppSettings value) => jsonEncode({
@@ -3109,7 +3185,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       await _showPresentation(live, id);
     }
     if (!live.ended) await live.connection?.reconnect();
-    await syncAnswers(live);
+    final otherPresentations = live.presentations.keys
+        .where((key) => key != id)
+        .toSet();
+    if (otherPresentations.isNotEmpty) {
+      await syncAnswers(live, skipPresentations: id == null ? const {} : {id});
+    }
     await syncAttendance(live);
     _notify();
   }

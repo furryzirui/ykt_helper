@@ -30,6 +30,11 @@ void main() {
             'login',
           ])
             jsonEncode({'time': time, 'event': event, 'success': true}),
+          jsonEncode({
+            'time': time,
+            'event': 'automatic',
+            'context': {'phase': 'generationSkip', 'reason': 'inactive'},
+          }),
         ].join('\n'),
       );
       final logs = AppLogs(fileProvider: () async => file);
@@ -38,6 +43,7 @@ void main() {
       expect(logs.entries.single.event, AppLogEvent.login);
       expect(await file.readAsString(), isNot(contains('backgroundHeartbeat')));
       expect(await file.readAsString(), isNot(contains('backgroundSnapshot')));
+      expect(await file.readAsString(), isNot(contains('generationSkip')));
       logs.dispose();
     },
   );
@@ -337,6 +343,100 @@ void main() {
       final exported = await logs.exportDocument(directory: directory);
       expect(await exported.readAsString(), isNot(contains('tiny-custom-key')));
       logs.dispose();
+    },
+  );
+
+  test(
+    'explicit authorized classroom content retains question choices and JSON or Markdown answers through export and restart',
+    () async {
+      final logs = AppLogs(fileProvider: () async => file);
+      await logs.initialize();
+      const content = {
+        'question': '题目：选择正确结果\nA. 1\nB. 2',
+        'aiResponse': '```json\n{"answer":["B"],"content":"说明"}\n```',
+        'answerSync': '{"p1":["B"],"p2":{"content":"本人主观答案"}}',
+        'answer': '["B"]',
+      };
+      logs.add(AppLogEvent.automatic, detail: '生成成功', content: content);
+      expect(logs.entries.single.content, content);
+      expect(logs.entries.single.detailText, contains('题干与选项：\n题目：选择正确结果'));
+      expect(logs.entries.single.detailText, contains('AI 原始回复：\n```json'));
+      expect(logs.document(), contains('本人主观答案'));
+      await logs.flush();
+      logs.dispose();
+      final restored = AppLogs(fileProvider: () async => file);
+      await restored.initialize();
+      expect(restored.entries.single.content, content);
+      final exported = await restored.exportDocument(directory: directory);
+      expect(await exported.readAsString(), contains(content['answerSync']!));
+      await restored.flush();
+      restored.dispose();
+    },
+  );
+
+  test(
+    'authorized content removes credentials and media without discarding real answer fields',
+    () async {
+      final logs = AppLogs(fileProvider: () async => file);
+      await logs.initialize();
+      logs.protectSecrets(['my-custom-key', 'my-classroom-token']);
+      logs.add(
+        AppLogEvent.automatic,
+        content: {
+          'question':
+              '1+1? <img src="https://cdn.example/q.png?token=private-image-token"> A.1 B.2',
+          'aiResponse':
+              '答案：B\n{"answer":"B","api_key":"private-json-key","content":"保留说明"}\nAuthorization: Bearer private-header\nCookie: sessionid=private-cookie\n<img src="data:image/png;base64,private-media">\nmy-custom-key my-classroom-token',
+          'answer':
+              '{"content":"我的回答","pics":["https://cdn.example/a.jpg?sign=private-pic"]}',
+          'payload': 'private-unknown-content',
+        },
+      );
+      final text = logs.entries.single.detailText;
+      expect(text, contains('A.1 B.2'));
+      expect(text, contains('"answer":"B"'));
+      expect(text, contains('保留说明'));
+      expect(text, contains('我的回答'));
+      expect(text, isNot(contains('private-')));
+      expect(text, isNot(contains('my-custom-key')));
+      expect(text, isNot(contains('my-classroom-token')));
+      expect(text, isNot(contains('data:image')));
+      await logs.flush();
+      expect(await file.readAsString(), isNot(contains('private-')));
+      logs.dispose();
+      final restored = AppLogs(fileProvider: () async => file);
+      await restored.initialize();
+      expect(restored.entries.single.detailText, text);
+      await restored.flush();
+      restored.dispose();
+    },
+  );
+
+  test(
+    'content is bounded per entry with explicit truncation and remains stable when reimported',
+    () async {
+      final logs = AppLogs(fileProvider: () async => file);
+      await logs.initialize();
+      logs.add(
+        AppLogEvent.answers,
+        content: {
+          'question': List.filled(6000, '题').join(),
+          'aiResponse': List.filled(5000, '答').join(),
+          'answerSync': '后续答案',
+        },
+      );
+      final entry = logs.entries.single;
+      expect(entry.content['question']!.length, 6000);
+      expect(entry.content['aiResponse'], endsWith('[内容已截断]'));
+      expect(entry.content['answerSync'], '[内容已截断]');
+      expect(entry.content.values.join().length, lessThan(8100));
+      await logs.flush();
+      logs.dispose();
+      final restored = AppLogs(fileProvider: () async => file);
+      await restored.initialize();
+      expect(restored.entries.single.content, entry.content);
+      await restored.flush();
+      restored.dispose();
     },
   );
 }
