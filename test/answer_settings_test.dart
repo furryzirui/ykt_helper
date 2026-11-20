@@ -15,10 +15,19 @@ void main() {
   test(
     'the updated default prompt migrates without replacing custom prompts',
     () {
-      expect(defaultAiPrompt, '请使用最简洁的回答完成这道题，不要使用markdown：{question}');
+      expect(
+        defaultAiPrompt,
+        '请使用最简洁的回答完成这道题，不要使用markdown，若为选择题则只回答选项：{question}',
+      );
       expect(
         AppSettings.fromJson({
           'customPrompt': '请使用最简洁的回答完成这道题：{question}',
+        }).customPrompt,
+        defaultAiPrompt,
+      );
+      expect(
+        AppSettings.fromJson({
+          'customPrompt': '请使用最简洁的回答完成这道题，不要使用markdown：{question}',
         }).customPrompt,
         defaultAiPrompt,
       );

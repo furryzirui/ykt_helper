@@ -282,7 +282,7 @@ enum BackgroundServiceMode { native, silentAudio, pictureInPicture, location }
 
 const serviceTimeoutOptions = [0, 10, 120, 1440];
 
-const defaultAiPrompt = '请使用最简洁的回答完成这道题，不要使用markdown：{question}';
+const defaultAiPrompt = '请使用最简洁的回答完成这道题，不要使用markdown，若为选择题则只回答选项：{question}';
 const defaultSlidePrompt = '可以参考课程课件进行完成，若有多道题目则仅完成我要求你回答的题目';
 const defaultFixedSingleAnswer = 'A';
 const defaultFixedMultipleAnswer = 'AB';
@@ -440,7 +440,10 @@ class AppSettings {
     apiKey: str(json['apiKey']),
     model: str(json['model']),
     customPrompt: json.containsKey('customPrompt')
-        ? json['customPrompt'] == '请使用最简洁的回答完成这道题：{question}'
+        ? const {
+                '请使用最简洁的回答完成这道题：{question}',
+                '请使用最简洁的回答完成这道题，不要使用markdown：{question}',
+              }.contains(json['customPrompt'])
               ? defaultAiPrompt
               : str(json['customPrompt'])
         : defaultAiPrompt,

@@ -969,7 +969,7 @@ class _QuestionCardState extends State<QuestionCard> {
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text('最多选择 ${question.selectionLimit} 项'),
               ),
-            if (_optionQuestion)
+            if (_optionQuestion && _multipleOptionQuestion)
               for (final option in question.options.entries)
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
@@ -996,6 +996,33 @@ class _QuestionCardState extends State<QuestionCard> {
                         }
                       : null,
                 ),
+            if (_optionQuestion && !_multipleOptionQuestion)
+              RadioGroup<String>(
+                groupValue: _choice.firstOrNull,
+                onChanged: (selected) {
+                  if (!editable || _submitting) return;
+                  setState(() {
+                    _choice.clear();
+                    if (selected != null) _choice.add(selected);
+                    _error = null;
+                  });
+                  _draftEdited();
+                },
+                child: Column(
+                  children: [
+                    for (final option in question.options.entries)
+                      RadioListTile<String>(
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.trailing,
+                        title: HtmlContent('${option.key}. ${option.value}'),
+                        value: option.key,
+                        selected: _choice.contains(option.key),
+                        toggleable: true,
+                        enabled: editable && !_submitting,
+                      ),
+                  ],
+                ),
+              ),
             if (!_optionQuestion && question.type == 4)
               for (var i = 0; i < _blanks.length; i++)
                 Padding(

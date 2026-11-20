@@ -97,12 +97,30 @@ class AiAnswerService {
     if (apiKey.trim().isNotEmpty) 'Authorization': 'Bearer ${apiKey.trim()}',
   };
 
-  static ApiFailure _requestFailure(
-    String message,
-    DioException error,
-  ) => ApiFailure(
-    '$message${error.response?.statusCode == null ? '，请检查地址和网络' : '（HTTP ${error.response!.statusCode}）'}',
-  );
+  static ApiFailure _requestFailure(String message, DioException error) {
+    final code = error.response?.statusCode;
+    final reason = code != null
+        ? switch (code) {
+            401 => '认证失败，请检查 API key',
+            403 => '访问被拒绝，请检查模型权限',
+            429 => '请求过于频繁或额度不足',
+            >= 500 => '模型服务暂时不可用',
+            _ => '服务返回错误',
+          }
+        : switch (error.type) {
+            DioExceptionType.connectionTimeout => '连接超时',
+            DioExceptionType.receiveTimeout => '等待模型响应超时',
+            DioExceptionType.sendTimeout => '发送请求超时',
+            DioExceptionType.connectionError => '网络连接失败',
+            DioExceptionType.badCertificate => '服务器证书校验失败',
+            DioExceptionType.cancel => '请求已取消',
+            _ => '网络请求失败，请检查地址和网络',
+          };
+    return ApiFailure(
+      '$message：$reason${code == null ? '' : '（HTTP $code）'}',
+      code,
+    );
+  }
 
   Future<String> generate({
     required AppSettings settings,

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../app/app_controller.dart';
+import '../services/app_logs.dart';
 import '../services/file_export.dart';
 import 'widgets.dart';
 
 class LogsPage extends StatefulWidget {
   final AppController controller;
-  const LogsPage({super.key, required this.controller});
+  final FileExport? fileExport;
+  const LogsPage({super.key, required this.controller, this.fileExport});
   @override
   State<LogsPage> createState() => _LogsPageState();
 }
@@ -24,7 +27,7 @@ class _LogsPageState extends State<LogsPage> {
     final origin = shareOrigin(context);
     try {
       final file = await widget.controller.logs.exportDocument();
-      await FileExport().deliver(
+      await (widget.fileExport ?? FileExport()).deliver(
         file,
         suggestedName: 'ykt-helper-logs.txt',
         mimeType: 'text/plain',
@@ -41,6 +44,45 @@ class _LogsPageState extends State<LogsPage> {
       if (mounted) setState(() => _exporting = false);
     }
   }
+
+  Future<void> _showDetail(AppLogEntry entry) => showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('日志详情'),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: SelectableText(
+            entry.detailText,
+            key: const ValueKey('log-detail'),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () async {
+            try {
+              await Clipboard.setData(ClipboardData(text: entry.detailText));
+              if (!dialogContext.mounted) return;
+              ScaffoldMessenger.of(
+                dialogContext,
+              ).showSnackBar(const SnackBar(content: Text('已复制')));
+            } catch (_) {
+              if (!dialogContext.mounted) return;
+              ScaffoldMessenger.of(
+                dialogContext,
+              ).showSnackBar(const SnackBar(content: Text('复制失败，请重试')));
+            }
+          },
+          child: const Text('复制'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -76,6 +118,7 @@ class _LogsPageState extends State<LogsPage> {
                       itemBuilder: (context, index) {
                         final entry = entries[index];
                         return ListTile(
+                          key: ValueKey('log-entry-$index'),
                           contentPadding: EdgeInsets.zero,
                           leading: Icon(
                             entry.success == false
@@ -89,6 +132,8 @@ class _LogsPageState extends State<LogsPage> {
                           subtitle: Text(
                             entry.time.toLocal().toString().split('.').first,
                           ),
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: () => _showDetail(entry),
                         );
                       },
                     ),

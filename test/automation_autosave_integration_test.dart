@@ -209,6 +209,8 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('auto-enter')));
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+      await tester.pumpAndSettle();
       expect(controller.settings.autoEnter, isTrue);
       expect(store.persisted.autoEnter, isTrue);
       expect(controller.settings.autoAnswer, isFalse);

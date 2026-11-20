@@ -179,6 +179,7 @@ void main() {
     store.values['settings'] = jsonEncode(
       AppSettings(
         autoEnter: true,
+        autoLocationCheckin: true,
         autoStartService: true,
         appAutoStart: true,
       ).toJson(),
@@ -212,6 +213,45 @@ void main() {
   });
 
   test(
+    'unified automatic check-in requires fresh location consent on upgrade',
+    () async {
+      store.values['settings'] = jsonEncode(
+        AppSettings(
+          autoEnter: true,
+          autoLocationCheckin: false,
+          autoStartService: true,
+          appAutoStart: true,
+        ).toJson(),
+      );
+      await controller.initialize();
+      expect(controller.settings.autoEnter, false);
+      expect(controller.settings.autoLocationCheckin, false);
+      expect(controller.settings.autoStartService, false);
+      expect(controller.settings.appAutoStart, false);
+      expect(object(jsonDecode(store.values['settings']!))['autoEnter'], false);
+    },
+  );
+
+  test(
+    'existing location consent and unrelated AI automation survive upgrade',
+    () async {
+      store.values['settings'] = jsonEncode(
+        AppSettings(
+          autoEnter: true,
+          autoLocationCheckin: true,
+          autoStartService: true,
+          appAutoStart: true,
+        ).toJson(),
+      );
+      await controller.initialize();
+      expect(controller.settings.autoEnter, true);
+      expect(controller.settings.autoLocationCheckin, true);
+      expect(controller.settings.autoStartService, true);
+      expect(store.settingsWrites, isEmpty);
+    },
+  );
+
+  test(
     'Windows refuses only explicit denial before persistence or registration',
     () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
@@ -221,7 +261,11 @@ void main() {
       autostart.permission = 'denied';
       await expectLater(
         controller.saveSettings(
-          AppSettings(autoEnter: true, appAutoStart: true),
+          AppSettings(
+            autoEnter: true,
+            autoLocationCheckin: true,
+            appAutoStart: true,
+          ),
         ),
         throwsA(isA<ApiFailure>()),
       );
@@ -240,14 +284,22 @@ void main() {
       for (final status in ['needsConfirmation', 'unsupported']) {
         autostart.permission = status;
         await controller.saveSettings(
-          AppSettings(autoEnter: true, appAutoStart: true),
+          AppSettings(
+            autoEnter: true,
+            autoLocationCheckin: true,
+            appAutoStart: true,
+          ),
         );
         expect(controller.settings.appAutoStart, true);
         expect(autostart.registrations.last, (enabled: true, eligible: true));
       }
       autostart.permissionError = const ApiFailure('无法读取自启动状态');
       await controller.saveSettings(
-        AppSettings(autoEnter: true, appAutoStart: true),
+        AppSettings(
+          autoEnter: true,
+          autoLocationCheckin: true,
+          appAutoStart: true,
+        ),
       );
       expect(controller.settings.appAutoStart, true);
       expect(autostart.registrations.last, (enabled: true, eligible: true));
@@ -260,10 +312,18 @@ void main() {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       controller.dispose();
       controller = create(backgroundAvailable: false)..account = _Api.user;
-      controller.settings = AppSettings(autoEnter: true, appAutoStart: true);
+      controller.settings = AppSettings(
+        autoEnter: true,
+        autoLocationCheckin: true,
+        appAutoStart: true,
+      );
       autostart.permission = 'denied';
       await controller.saveSettings(
-        AppSettings(autoEnter: true, appAutoStart: false),
+        AppSettings(
+          autoEnter: true,
+          autoLocationCheckin: true,
+          appAutoStart: false,
+        ),
       );
       expect(controller.settings.appAutoStart, false);
       expect(autostart.permissionChecks, 0);
@@ -279,12 +339,18 @@ void main() {
       controller = create(backgroundAvailable: false)..account = _Api.user;
       controller.settings = AppSettings(
         autoEnter: true,
+        autoLocationCheckin: true,
         autoAnswer: true,
         appAutoStart: true,
       );
       autostart.permission = 'denied';
       await controller.saveSettings(
-        AppSettings(autoEnter: true, autoAnswer: false, appAutoStart: true),
+        AppSettings(
+          autoEnter: true,
+          autoLocationCheckin: true,
+          autoAnswer: false,
+          appAutoStart: true,
+        ),
       );
       expect(controller.settings.autoAnswer, false);
       expect(controller.settings.autoEnter, true);
@@ -306,6 +372,7 @@ void main() {
       await controller.saveSettings(
         AppSettings(
           autoEnter: true,
+          autoLocationCheckin: true,
           autoStartService: true,
           appAutoStart: true,
         ),
@@ -353,7 +420,11 @@ void main() {
       controller.dispose();
       controller = create(backgroundAvailable: false)..account = _Api.user;
       await controller.saveSettings(
-        AppSettings(autoEnter: true, appAutoStart: true),
+        AppSettings(
+          autoEnter: true,
+          autoLocationCheckin: true,
+          appAutoStart: true,
+        ),
       );
       expect(controller.settings.appAutoStart, true);
       expect(autostart.registrations.last, (enabled: true, eligible: true));
@@ -470,7 +541,11 @@ void main() {
   test(
     'OS registration failure preserves saved settings and reports independently',
     () async {
-      final previous = AppSettings(autoEnter: true, fixedSingleAnswer: 'B');
+      final previous = AppSettings(
+        autoEnter: true,
+        autoLocationCheckin: true,
+        fixedSingleAnswer: 'B',
+      );
       controller.settings = previous;
       store.values['settings'] = jsonEncode(previous.toJson());
       controller.account = _Api.user;
@@ -498,7 +573,11 @@ void main() {
     () async {
       controller.account = _Api.user;
       background.fail = true;
-      final requested = AppSettings(autoEnter: true, autoStartService: true);
+      final requested = AppSettings(
+        autoEnter: true,
+        autoLocationCheckin: true,
+        autoStartService: true,
+      );
       await controller.saveSettings(requested);
       expect(controller.settings.toJson(), requested.toJson());
       expect(object(jsonDecode(store.values['settings']!)), requested.toJson());
@@ -527,6 +606,7 @@ void main() {
       await controller.saveSettings(
         AppSettings(
           autoEnter: true,
+          autoLocationCheckin: true,
           autoStartService: true,
           appAutoStart: true,
         ),
@@ -610,6 +690,7 @@ void main() {
     controller.account = _Api.user;
     controller.settings = AppSettings(
       autoEnter: true,
+      autoLocationCheckin: true,
       autoStartService: true,
       appAutoStart: true,
     );
@@ -631,6 +712,7 @@ void main() {
     controller.account = _Api.user;
     controller.settings = AppSettings(
       autoEnter: true,
+      autoLocationCheckin: true,
       autoStartService: true,
       appAutoStart: true,
     );

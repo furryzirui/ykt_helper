@@ -392,19 +392,29 @@ void main() {
     );
     await tester.pumpWidget(view());
     var choices = tester
-        .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+        .widgetList<RadioListTile<String>>(find.byType(RadioListTile<String>))
         .toList();
-    expect(choices.map((choice) => choice.value), [true, false, true, false]);
+    expect(choices.map((choice) => choice.selected), [
+      true,
+      false,
+      true,
+      false,
+    ]);
     expect(find.text('答案已填充，待确认提交'), findsNWidgets(2));
-    await tester.tap(find.byType(CheckboxListTile).at(1));
+    await tester.tap(find.byType(RadioListTile<String>).at(1));
     await tester.pumpWidget(view());
     choices = tester
-        .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+        .widgetList<RadioListTile<String>>(find.byType(RadioListTile<String>))
         .toList();
-    expect(choices[1].value, isTrue);
+    expect(choices[1].selected, isTrue);
     expect(live.draftAnswers[question.id], ['B']);
     expect(live.autoStates[question.id], '答案已修改，待确认提交');
-    expect(choices.map((choice) => choice.value), [false, true, false, true]);
+    expect(choices.map((choice) => choice.selected), [
+      false,
+      true,
+      false,
+      true,
+    ]);
     await tester.tap(find.text('提交答案').first);
     await tester.pump();
     expect(controller.submittedAnswer, ['B']);
@@ -870,25 +880,32 @@ void main() {
       );
       expect(find.text('判断题'), findsOneWidget);
       expect(find.text('最多选择 2 项'), findsNothing);
-      expect(find.byType(CheckboxListTile), findsNWidgets(2));
+      expect(find.byType(RadioListTile<String>), findsNWidgets(2));
+      expect(find.byType(CheckboxListTile), findsNothing);
       expect(
         tester
-            .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
-            .where((option) => option.value == true),
+            .widgetList<RadioListTile<String>>(
+              find.byType(RadioListTile<String>),
+            )
+            .where((option) => option.selected == true),
         hasLength(1),
       );
-      await tester.tap(find.byType(CheckboxListTile).at(1));
+      await tester.tap(find.byType(RadioListTile<String>).at(1));
       await tester.pump();
       expect(
         tester
-            .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(0))
-            .value,
+            .widget<RadioListTile<String>>(
+              find.byType(RadioListTile<String>).at(0),
+            )
+            .selected,
         isFalse,
       );
       expect(
         tester
-            .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(1))
-            .value,
+            .widget<RadioListTile<String>>(
+              find.byType(RadioListTile<String>).at(1),
+            )
+            .selected,
         isTrue,
       );
       await tester.tap(find.text('提交答案'));
@@ -942,11 +959,11 @@ void main() {
     // current question, even though the same QuestionCard State is reused.
     await tester.pumpWidget(view(question(const {'A': '选项一', 'B': '选项二'})));
     expect(find.text('判断题'), findsOneWidget);
-    expect(find.byType(CheckboxListTile), findsNWidgets(2));
+    expect(find.byType(RadioListTile<String>), findsNWidgets(2));
     expect(
       tester
-          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
-          .every((option) => option.value == false),
+          .widgetList<RadioListTile<String>>(find.byType(RadioListTile<String>))
+          .every((option) => option.selected == false),
       isTrue,
     );
     await tester.tap(find.text('提交答案'));
@@ -954,7 +971,7 @@ void main() {
     expect(find.text('请选择答案'), findsOneWidget);
     expect(controller.submittedAnswer, isNull);
 
-    await tester.tap(find.byType(CheckboxListTile).at(1));
+    await tester.tap(find.byType(RadioListTile<String>).at(1));
     await tester.pump();
     await tester.tap(find.text('提交答案'));
     await tester.pump();
@@ -991,6 +1008,8 @@ void main() {
         ),
       ),
     );
+    expect(find.byType(RadioListTile<String>), findsNothing);
+    expect(find.byType(CheckboxListTile), findsNWidgets(3));
     for (final index in [0, 1, 2]) {
       await tester.tap(find.byType(CheckboxListTile).at(index));
       await tester.pump();

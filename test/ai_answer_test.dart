@@ -43,7 +43,109 @@ class AiAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+class FailingAiAdapter implements HttpClientAdapter {
+  final DioExceptionType type;
+  final int? status;
+  FailingAiAdapter(this.type, {this.status});
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<dynamic>? cancelFuture,
+  ) async {
+    throw DioException(
+      requestOptions: options,
+      type: type,
+      message: 'secret-api-key https://private-host.invalid/v1',
+      response: status == null
+          ? null
+          : Response(
+              requestOptions: options,
+              statusCode: status,
+              data: {'message': 'secret-api-key'},
+            ),
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 void main() {
+  for (final entry in {
+    DioExceptionType.connectionTimeout: '连接超时',
+    DioExceptionType.receiveTimeout: '等待模型响应超时',
+    DioExceptionType.sendTimeout: '发送请求超时',
+    DioExceptionType.connectionError: '网络连接失败',
+    DioExceptionType.badCertificate: '服务器证书校验失败',
+  }.entries) {
+    test('AI request exposes safe ${entry.key.name} diagnostics', () async {
+      final service = AiAnswerService(
+        client: Dio()..httpClientAdapter = FailingAiAdapter(entry.key),
+      );
+      await expectLater(
+        service.generate(
+          settings: AppSettings(
+            baseUrl: 'https://private-host.invalid/v1',
+            apiKey: 'secret-api-key',
+            model: 'model',
+          ),
+          question: const Question(id: 'q', body: 'private question', type: 5),
+          slides: [],
+          loadImage: (_) async => Uint8List(0),
+        ),
+        throwsA(
+          isA<ApiFailure>().having(
+            (failure) => failure.message,
+            'safe reason',
+            allOf(
+              contains(entry.value),
+              isNot(contains('secret-api-key')),
+              isNot(contains('private-host')),
+              isNot(contains('private question')),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+  for (final entry in {
+    401: '认证失败',
+    403: '访问被拒绝',
+    429: '请求过于频繁',
+    503: '模型服务暂时不可用',
+  }.entries) {
+    test(
+      'AI request explains HTTP ${entry.key} without provider body',
+      () async {
+        final service = AiAnswerService(
+          client: Dio()
+            ..httpClientAdapter = FailingAiAdapter(
+              DioExceptionType.badResponse,
+              status: entry.key,
+            ),
+        );
+        await expectLater(
+          service.models(
+            baseUrl: 'https://private-host.invalid/v1',
+            apiKey: 'secret-api-key',
+          ),
+          throwsA(
+            isA<ApiFailure>().having(
+              (failure) => failure.message,
+              'safe reason',
+              allOf(
+                contains(entry.value),
+                contains('HTTP ${entry.key}'),
+                isNot(contains('secret-api-key')),
+                isNot(contains('private-host')),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
   test(
     'question figures are attached even when no course slides are sent',
     () async {
@@ -127,7 +229,7 @@ void main() {
   test('exact user prompt and optional slide sentence', () {
     expect(
       AiAnswerService.prompt(q, false),
-      '请使用最简洁的回答完成这道题，不要使用markdown：题目\nA. 甲\nB. 乙\nC. 丙',
+      '请使用最简洁的回答完成这道题，不要使用markdown，若为选择题则只回答选项：题目\nA. 甲\nB. 乙\nC. 丙',
     );
     expect(AiAnswerService.prompt(q, true).endsWith(defaultSlidePrompt), true);
   });
@@ -240,7 +342,18 @@ void main() {
         baseUrl: 'https://ai.example.com/v1',
         apiKey: 'secret-user-key',
       ),
-      throwsA(predicate((e) => e.toString() == '模型列表获取失败（HTTP 401）')),
+      throwsA(
+        isA<ApiFailure>().having(
+          (failure) => failure.message,
+          'safe reason',
+          allOf(
+            contains('认证失败'),
+            contains('HTTP 401'),
+            isNot(contains('secret-user-key')),
+            isNot(contains('echo')),
+          ),
+        ),
+      ),
     );
   });
   test(

@@ -96,6 +96,8 @@ class _LoginPageState extends State<LoginPage> {
         AppLogEvent.login,
         success: false,
         code: error is ApiFailure ? error.code : null,
+        error: error,
+        context: const {'phase': 'qrLogin'},
       );
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -120,6 +122,8 @@ class _LoginPageState extends State<LoginPage> {
         AppLogEvent.login,
         success: false,
         code: error is ApiFailure ? error.code : null,
+        error: error,
+        context: const {'phase': 'loadProfile'},
       );
       if (mounted) setState(() => _error = error.toString());
     } finally {
@@ -154,6 +158,8 @@ class _LoginPageState extends State<LoginPage> {
         AppLogEvent.login,
         success: false,
         code: error is ApiFailure ? error.code : null,
+        error: error,
+        context: const {'phase': 'sendSms'},
       );
       if (mounted) setState(() => _error = error.toString());
     } finally {
@@ -187,6 +193,8 @@ class _LoginPageState extends State<LoginPage> {
         AppLogEvent.login,
         success: false,
         code: error is ApiFailure ? error.code : null,
+        error: error,
+        context: const {'phase': 'accountLogin'},
       );
       if (mounted) setState(() => _error = error.toString());
     } finally {

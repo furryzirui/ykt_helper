@@ -9,7 +9,12 @@ void main(List<String> arguments) {
   final controller = AppController();
   controller.setForeground(!arguments.contains('--background-auto-start'));
   FlutterError.onError = (details) {
-    controller.logs.add(AppLogEvent.failure, success: false);
+    controller.logs.add(
+      AppLogEvent.failure,
+      success: false,
+      error: details.exception,
+      context: const {'phase': 'flutterFramework'},
+    );
     FlutterError.presentError(details);
   };
   final foreground = ValueNotifier<bool>(

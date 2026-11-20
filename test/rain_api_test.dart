@@ -55,6 +55,38 @@ const session = ClassroomSession(
 
 void main() {
   test(
+    'request diagnostics preserve timeout stage without request secrets',
+    () async {
+      final diagnostics =
+          <({String path, String method, Object error, Duration elapsed})>[];
+      final transport = FakeTransport(
+        (r) => throw DioException(
+          requestOptions: r,
+          type: DioExceptionType.receiveTimeout,
+          message: 'sensitive response body',
+        ),
+      );
+      final api = RainApi(
+        dio: Dio()..httpClientAdapter = transport,
+        onRequestError: (path, method, error, elapsed) => diagnostics.add((
+          path: path,
+          method: method,
+          error: error,
+          elapsed: elapsed,
+        )),
+      )..userId = 'u';
+      await expectLater(
+        api.ownAnswers('l', 'deck', session: session),
+        throwsA(predicate((error) => error.toString().contains('等待雨课堂响应超时'))),
+      );
+      expect(diagnostics, hasLength(1));
+      expect(diagnostics.single.path, '/api/v3/lesson/presentation/fetch');
+      expect(diagnostics.single.method, 'GET');
+      expect(diagnostics.single.error.toString(), isNot(contains('sensitive')));
+    },
+  );
+
+  test(
     'attendance reads explicit report fields and never infers from entry',
     () async {
       var response = <String, dynamic>{'lessonId': 'l'};

@@ -271,55 +271,53 @@ void main() {
     await _close(tester, controller);
   });
 
-  testWidgets('位置自动签到独立开关需确认，取消不保存，关闭父项会关闭子项', (tester) async {
+  testWidgets('自动签到统一确认位置坐标，取消不保存，确认和关闭同时修改两个偏好', (tester) async {
     final controller = _Controller(_Ai());
     await _show(tester, controller);
-    final position = _setting('auto-location-checkin');
-    expect(tester.widget<SwitchListTile>(position).onChanged, isNull);
-    expect(find.text('请先开启自动签到'), findsOneWidget);
+    expect(_setting('auto-location-checkin'), findsNothing);
     await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
-    expect(tester.widget<SwitchListTile>(position).onChanged, isNotNull);
-    await tester.tap(position);
-    await tester.pumpAndSettle();
+    expect(find.text('确认自动签到'), findsOneWidget);
     expect(find.textContaining('并非手机实测位置'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, '取消'));
     await tester.pumpAndSettle();
-    expect(controller.settings.autoLocationCheckin, false);
-    await tester.tap(position);
+    expect(controller.saves, 0);
+    expect(controller.settings.autoEnter, isFalse);
+    expect(controller.settings.autoLocationCheckin, isFalse);
+    await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
     await tester.pumpAndSettle();
-    expect(controller.settings.autoLocationCheckin, true);
+    expect(controller.settings.autoEnter, isTrue);
+    expect(controller.settings.autoLocationCheckin, isTrue);
     await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
-    expect(controller.settings.autoLocationCheckin, false);
-    expect(tester.widget<SwitchListTile>(position).onChanged, isNull);
+    expect(find.text('确认自动签到'), findsNothing);
+    expect(controller.settings.autoEnter, isFalse);
+    expect(controller.settings.autoLocationCheckin, isFalse);
     await _close(tester, controller);
   });
 
-  testWidgets('位置偏好保存未完成时关闭自动签到不会被旧保存覆盖', (tester) async {
+  testWidgets('统一签到保存未完成时关闭不会被旧保存覆盖', (tester) async {
     final pending = Completer<void>();
-    final controller = _Controller(_Ai())
-      ..settings = AppSettings(autoEnter: true)
-      ..pendingSave = pending;
+    final controller = _Controller(_Ai())..pendingSave = pending;
     await _show(tester, controller);
-    await tester.tap(_setting('auto-location-checkin'));
+    await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
     await tester.pump();
-    expect(controller.snapshots.single.autoLocationCheckin, true);
+    expect(controller.snapshots.single.autoLocationCheckin, isTrue);
     await tester.tap(_setting('auto-enter'));
     await tester.pump();
     expect(
-      tester.widget<SwitchListTile>(_setting('auto-location-checkin')).value,
-      false,
+      tester.widget<SwitchListTile>(_setting('auto-enter')).value,
+      isFalse,
     );
     pending.complete();
     controller.pendingSave = null;
     await tester.pumpAndSettle();
-    expect(controller.settings.autoEnter, false);
-    expect(controller.settings.autoLocationCheckin, false);
+    expect(controller.settings.autoEnter, isFalse);
+    expect(controller.settings.autoLocationCheckin, isFalse);
     await _close(tester, controller);
   });
 
@@ -452,6 +450,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
+    if (find.text('确认自动签到').evaluate().isNotEmpty) {
+      await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+      await tester.pumpAndSettle();
+    }
     expect(find.textContaining('模型服务返回 HTTP 404'), findsOneWidget);
     await _reveal(tester, find.byTooltip('刷新模型列表'));
     await tester.tap(find.byTooltip('刷新模型列表'));
@@ -481,6 +483,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
+    if (find.text('确认自动签到').evaluate().isNotEmpty) {
+      await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+      await tester.pumpAndSettle();
+    }
     expect(controller.settings.autoEnter, isTrue);
     expect(controller.settings.autoAnswer, isFalse);
     expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
@@ -561,6 +567,10 @@ void main() {
     );
     await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
+    if (find.text('确认自动签到').evaluate().isNotEmpty) {
+      await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+      await tester.pumpAndSettle();
+    }
     expect(controller.settings.autoEnter, isTrue);
     await tester.tap(_setting('auto-start-service'));
     await tester.pumpAndSettle();
@@ -1140,7 +1150,7 @@ void main() {
     ]) {
       await tester.tap(_setting(key));
       await tester.pump(const Duration(milliseconds: 20));
-      if (key == 'auto-submit') {
+      if (key == 'auto-submit' || key == 'auto-enter') {
         await tester.pumpAndSettle();
         await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
         await tester.pump(const Duration(milliseconds: 20));
@@ -1186,6 +1196,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(_setting('auto-enter'));
     await tester.pumpAndSettle();
+    if (find.text('确认自动签到').evaluate().isNotEmpty) {
+      await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+      await tester.pumpAndSettle();
+    }
     expect(controller.settings.autoEnter, isTrue);
     expect(find.text('后台课堂服务已开启'), findsNothing);
     await tester.pageBack();

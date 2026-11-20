@@ -966,6 +966,122 @@ void main() {
     },
   );
 
+  testWidgets(
+    'teacher switching PPT prepares the explicit new deck despite a previous-deck timeline slide',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      api.decks['next'] = const Presentation(
+        id: 'next',
+        title: '新课件',
+        slides: [
+          Slide(
+            id: 'next-slide',
+            index: 0,
+            imageUrl: '',
+            question: Question(
+              id: 'next-question',
+              body: '新课件题目',
+              type: 1,
+              options: {'A': '甲', 'B': '乙', 'C': '丙'},
+            ),
+          ),
+        ],
+      );
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      ai.requests['q']!.single.complete('A');
+      await tester.pump();
+      await controller.processEvent(live, {
+        'op': 'showpresentation',
+        'presentation': 'next',
+        'slideindex': 1,
+        'timeline': [
+          {'type': 'slide', 'pres': 'p', 'si': 2},
+        ],
+      });
+      await tester.pump();
+      expect(live.presentationId, 'next');
+      expect(live.questions.containsKey('next-question'), isTrue);
+      expect(live.currentQuestion?.id, 'next-question');
+      expect(ai.requests['next-question'], hasLength(1));
+      ai.requests['next-question']!.single.complete('C');
+      await tester.pump();
+      expect(live.draftAnswers['next-question'], ['C']);
+      expect(live.draftAnswers['q'], ['A']);
+      expect(api.submissions, 0);
+    },
+  );
+
+  testWidgets(
+    'unrelated settings edits preserve in-flight AI and same configuration does not duplicate it',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      expect(ai.requests['q'], hasLength(1));
+      expect(ai.requests['q2'], hasLength(1));
+      final changed = AppSettings.fromJson(controller.settings.toJson())
+        ..autoSubmitDelaySeconds = 45;
+      await controller.saveSettings(changed);
+      await controller.saveSettings(AppSettings.fromJson(changed.toJson()));
+      await tester.pump();
+      expect(ai.requests['q'], hasLength(1));
+      expect(ai.requests['q2'], hasLength(1));
+      ai.requests['q']!.single.complete('B');
+      ai.requests['q2']!.single.complete('C');
+      await tester.pump();
+      expect(live.draftAnswers['q'], ['B']);
+      expect(live.draftAnswers['q2'], ['C']);
+    },
+  );
+
+  testWidgets(
+    'explicit classroom refresh retries failed AI preparation without repeating completed work',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai);
+      ai.requests['q']!.single.completeError(
+        const ApiFailure('temporary failure'),
+      );
+      ai.requests['q2']!.single.complete('C');
+      await tester.pump();
+      expect(live.draftAnswers.containsKey('q'), isFalse);
+      await controller.refreshClassroom(live);
+      await tester.pump();
+      expect(ai.requests['q'], hasLength(2));
+      expect(ai.requests['q2'], hasLength(1));
+      ai.requests['q']![1].complete('B');
+      await tester.pump();
+      expect(live.draftAnswers['q'], ['B']);
+      expect(live.draftAnswers['q2'], ['C']);
+    },
+  );
+
+  testWidgets(
+    'an older same-configuration AI response cannot overwrite its newer replacement',
+    (tester) async {
+      final ai = BatchAi();
+      useAiClock(tester, ai);
+      controller.settings.model = 'original';
+      final live = await controller.enter(lesson);
+      await controller.processEvent(live, hello());
+      await controller.saveSettings(
+        AppSettings.fromJson(controller.settings.toJson())..model = 'other',
+      );
+      await controller.saveSettings(
+        AppSettings.fromJson(controller.settings.toJson())..model = 'original',
+      );
+      await tester.pump();
+      expect(ai.requests['q'], hasLength(3));
+      ai.requests['q']![2].complete('C');
+      await tester.pump();
+      ai.requests['q']![0].complete('A');
+      ai.requests['q']![1].complete('B');
+      await tester.pump();
+      expect(live.draftAnswers['q'], ['C']);
+    },
+  );
+
   test(
     'enabling automation preserves manually edited and already submitted choices',
     () async {

@@ -565,8 +565,8 @@ void main() {
     final initialState = tester.state(find.byType(QuestionCard));
     expect(
       tester
-          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
-          .every((tile) => tile.value == false),
+          .widgetList<RadioListTile<String>>(find.byType(RadioListTile<String>))
+          .every((tile) => tile.selected == false),
       isTrue,
     );
     await controller.saveSettings(
@@ -577,11 +577,13 @@ void main() {
     expect(live.draftAnswers[question.id], ['C']);
     expect(
       tester
-          .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(2))
-          .value,
+          .widget<RadioListTile<String>>(
+            find.byType(RadioListTile<String>).at(2),
+          )
+          .selected,
       isTrue,
     );
-    await tester.tap(find.byType(CheckboxListTile).first);
+    await tester.tap(find.byType(RadioListTile<String>).first);
     await tester.pump();
     await controller.saveSettings(
       AppSettings(autoAnswer: true, fixedSingleAnswer: 'D'),
@@ -590,14 +592,18 @@ void main() {
     expect(live.draftAnswers[question.id], ['A']);
     expect(
       tester
-          .widget<CheckboxListTile>(find.byType(CheckboxListTile).first)
-          .value,
+          .widget<RadioListTile<String>>(
+            find.byType(RadioListTile<String>).first,
+          )
+          .selected,
       isTrue,
     );
     expect(
       tester
-          .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(3))
-          .value,
+          .widget<RadioListTile<String>>(
+            find.byType(RadioListTile<String>).at(3),
+          )
+          .selected,
       isFalse,
     );
     await tester.pumpWidget(const SizedBox());
@@ -675,8 +681,10 @@ void main() {
       expect(live.draftAnswers.containsKey(question.id), isFalse);
       expect(
         tester
-            .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
-            .every((tile) => tile.value == false),
+            .widgetList<RadioListTile<String>>(
+              find.byType(RadioListTile<String>),
+            )
+            .every((tile) => tile.selected == false),
         isTrue,
       );
       ai.response.complete('C');
@@ -685,8 +693,10 @@ void main() {
       expect(live.draftAnswers[question.id], ['C']);
       expect(
         tester
-            .widget<CheckboxListTile>(find.byType(CheckboxListTile).at(2))
-            .value,
+            .widget<RadioListTile<String>>(
+              find.byType(RadioListTile<String>).at(2),
+            )
+            .selected,
         isTrue,
       );
       expect(

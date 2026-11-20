@@ -41,7 +41,7 @@ class _AutomationPageState extends State<AutomationPage>
   Future<void>? _saveFlight;
   bool _dirty = false, _saveAgain = false, _leaving = false, _canPop = false;
   bool _closing = false;
-  bool _confirmingAutoSubmit = false;
+  bool _confirmingAutoSubmit = false, _confirmingAutoEnter = false;
   int _editRevision = 0;
   String? _saveError, _configurationError;
   int _modelGeneration = 0;
@@ -401,6 +401,8 @@ class _AutomationPageState extends State<AutomationPage>
         AppLogEvent.automatic,
         success: false,
         code: failure is ApiFailure ? failure.code : null,
+        error: failure,
+        context: const {'phase': 'fetchModels'},
       );
       if (!_currentModelRequest(generation, baseUrl, apiKey)) return;
       setState(() {
@@ -507,14 +509,32 @@ class _AutomationPageState extends State<AutomationPage>
     });
   }
 
-  Future<void> _setAutoLocationCheckin(bool value) async {
-    if (value) {
+  Future<void> _setAutoEnter(bool value) async {
+    if (_disabled || _draft == null) return;
+    if (!value) {
+      _edit(() {
+        _draft!
+          ..autoEnter = false
+          ..autoLocationCheckin = false;
+        if (!_draft!.autoAnswer) {
+          _draft!
+            ..autoStartService = false
+            ..appAutoStart = false;
+        }
+      });
+      return;
+    }
+    if (_draft!.autoEnter || _confirmingAutoEnter) return;
+    final draft = _draft, account = widget.controller.account;
+    final revision = _editRevision;
+    _confirmingAutoEnter = true;
+    try {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('确认自动位置签到'),
+          title: const Text('确认自动签到'),
           content: const Text(
-            '开启后将使用服务器返回的签到中心坐标自动完成每轮位置签到，并非手机实测位置。后续自动签到不再逐次确认；手动位置签到仍需确认。',
+            '开启后自动进入课堂并签到，位置签到使用服务器返回的签到中心坐标，并非手机实测位置。后续每轮自动签到不再逐次确认，手动位置签到仍需确认。',
           ),
           actions: [
             TextButton(
@@ -528,10 +548,23 @@ class _AutomationPageState extends State<AutomationPage>
           ],
         ),
       );
-      if (confirmed != true || !mounted) return;
+      if (confirmed != true ||
+          !mounted ||
+          _disabled ||
+          _closing ||
+          !identical(account, widget.controller.account) ||
+          !identical(draft, _draft) ||
+          revision != _editRevision) {
+        return;
+      }
+      _edit(
+        () => _draft!
+          ..autoEnter = true
+          ..autoLocationCheckin = true,
+      );
+    } finally {
+      _confirmingAutoEnter = false;
     }
-    if (!mounted || _disabled || !_draft!.autoEnter) return;
-    _edit(() => _draft!.autoLocationCheckin = value);
   }
 
   Future<void> _setAutoSubmit(bool value) async {
@@ -966,39 +999,9 @@ class _AutomationPageState extends State<AutomationPage>
                         contentPadding: const EdgeInsets.symmetric(vertical: 4),
                         secondary: _settingIcon(Icons.how_to_reg_outlined),
                         title: const Text('自动签到'),
-                        subtitle: const SettingDescription('发现正在上课的课堂后自动进入并签到'),
+                        subtitle: const SettingDescription('自动进入课堂并签到，包含位置签到'),
                         value: settings.autoEnter,
-                        onChanged: _disabled
-                            ? null
-                            : (value) {
-                                _edit(() {
-                                  settings.autoEnter = value;
-                                  if (!value) {
-                                    settings.autoLocationCheckin = false;
-                                  }
-                                  if (!settings.autoEnter &&
-                                      !settings.autoAnswer) {
-                                    settings.autoStartService = false;
-                                    settings.appAutoStart = false;
-                                  }
-                                });
-                              },
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        key: const ValueKey('auto-location-checkin'),
-                        contentPadding: const EdgeInsets.symmetric(vertical: 4),
-                        secondary: _settingIcon(Icons.location_on_outlined),
-                        title: const Text('位置签到'),
-                        subtitle: SettingDescription(
-                          settings.autoEnter
-                              ? '使用服务器签到中心自动完成每轮位置签到'
-                              : '请先开启自动签到',
-                        ),
-                        value: settings.autoLocationCheckin,
-                        onChanged: _disabled || !settings.autoEnter
-                            ? null
-                            : _setAutoLocationCheckin,
+                        onChanged: _disabled ? null : _setAutoEnter,
                       ),
                       const Divider(height: 1),
                       SwitchListTile(

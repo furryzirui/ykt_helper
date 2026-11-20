@@ -14,6 +14,13 @@ class RainApi {
   final CookieJar _cookies = CookieJar();
   final Future<void> Function(String cookies)? onCookiesChanged;
   final void Function(int? status)? onRequestFailure;
+  final void Function(
+    String path,
+    String method,
+    Object error,
+    Duration elapsed,
+  )?
+  onRequestError;
   final Map<String, Cookie> _savedCookies = {};
   final Map<String, int> _locationRounds = {};
   final Map<String, Future<bool>> _locationPending = {};
@@ -24,8 +31,12 @@ class RainApi {
   Future<void> _cookieWrites = Future<void>.value();
   final String _deviceId = '${DateTime.now().microsecondsSinceEpoch}';
 
-  RainApi({Dio? dio, this.onCookiesChanged, this.onRequestFailure})
-    : dio = dio ?? Dio() {
+  RainApi({
+    Dio? dio,
+    this.onCookiesChanged,
+    this.onRequestFailure,
+    this.onRequestError,
+  }) : dio = dio ?? Dio() {
     this.dio.options = BaseOptions(
       baseUrl: origin.toString(),
       connectTimeout: const Duration(seconds: 20),
@@ -199,6 +210,7 @@ class RainApi {
     Json? query,
     ClassroomSession? session,
   }) async {
+    final watch = Stopwatch()..start();
     if (!path.startsWith('/') || path.startsWith('//')) {
       throw const ApiFailure('接口路径无效');
     }
@@ -221,12 +233,41 @@ class RainApi {
       _success(json);
       return response;
     } on DioException catch (error) {
-      if (error.error is ApiFailure) throw error.error as ApiFailure;
       final code = error.response?.statusCode;
-      if (code == 401) throw const ApiFailure('登录已失效，请重新登录', 401);
-      if (code == 403) throw const ApiFailure('当前账号没有访问此内容的权限', 403);
-      if (code != null) throw ApiFailure('雨课堂请求失败（HTTP $code）', code);
-      throw const ApiFailure('无法连接雨课堂，请检查网络后重试');
+      final ApiFailure failure;
+      if (error.error is ApiFailure) {
+        failure = error.error as ApiFailure;
+      } else if (code == 401) {
+        failure = const ApiFailure('登录已失效，请重新登录', 401);
+      } else if (code == 403) {
+        failure = const ApiFailure('当前账号没有访问此内容的权限', 403);
+      } else if (code != null) {
+        failure = ApiFailure('雨课堂请求失败（HTTP $code）', code);
+      } else {
+        failure = ApiFailure(switch (error.type) {
+          DioExceptionType.connectionTimeout => '连接雨课堂超时，请检查网络后重试',
+          DioExceptionType.receiveTimeout => '等待雨课堂响应超时，请稍后重试',
+          DioExceptionType.sendTimeout => '向雨课堂发送数据超时，请检查网络后重试',
+          DioExceptionType.badCertificate => '雨课堂连接证书校验失败',
+          DioExceptionType.cancel => '雨课堂请求已取消',
+          _ => '无法连接雨课堂，请检查网络后重试',
+        });
+      }
+      onRequestError?.call(
+        path,
+        body == null ? 'GET' : 'POST',
+        failure,
+        watch.elapsed,
+      );
+      throw failure;
+    } on ApiFailure catch (failure) {
+      onRequestError?.call(
+        path,
+        body == null ? 'GET' : 'POST',
+        failure,
+        watch.elapsed,
+      );
+      rethrow;
     }
   }
 

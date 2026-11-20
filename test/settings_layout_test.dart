@@ -315,6 +315,8 @@ void main() {
         final status = find.byKey(const ValueKey('automation-status'));
         tester.widget<SwitchListTile>(autoEnter).onChanged!(true);
         await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
+        await tester.pumpAndSettle();
         expect(tester.widget<Text>(status).data, '已自动保存');
         _checkStatusGeometry(tester, size, appBar, firstSetting);
         await _capture(
@@ -411,6 +413,8 @@ void main() {
         tester
             .widget<SwitchListTile>(find.byKey(const ValueKey('auto-enter')))
             .onChanged!(true);
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, '确认开启'));
         await tester.pumpAndSettle();
         expect(tester.widget<Text>(status).data, '已自动保存');
         _checkStatusGeometry(tester, size, appBar, firstSetting);

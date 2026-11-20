@@ -174,6 +174,9 @@ class _Harness {
           )
           ..account = const Account(id: 'user', name: '测试')
           ..settings = settings ?? AppSettings(autoEnter: true);
+    // An enabled unified check-in setting in these runtime fixtures has
+    // already received the location confirmation in the settings UI.
+    controller.settings.autoLocationCheckin = controller.settings.autoEnter;
   }
   void dispose(FakeAsync async) {
     controller.dispose();
