@@ -184,6 +184,9 @@ void main() {
     );
     final slideRect = tester.getRect(find.byType(SlideViewport));
     final cardRect = tester.getRect(find.byType(QuestionCard));
+    expect(find.byTooltip('刷新课堂'), findsOneWidget);
+    expect(find.byTooltip('导出课件'), findsOneWidget);
+    expect(find.byTooltip('同步我的答案'), findsNothing);
     expect(cardRect.top, greaterThan(slideRect.bottom));
     expect(find.text('后续页面题目'), findsNothing);
     await tester.tap(find.byTooltip('下一页'));
@@ -199,54 +202,80 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('教师翻页定位第28页预览，手动滑动不锁定，关闭跟随不滚动', (tester) async {
-    final controller = _Controller(), live = _live(pages: 30);
-    controller.classrooms[live.lesson.id] = live;
-    await _mount(
-      tester,
-      LivePage(controller: controller, classroom: live),
-      const Size(1280, 800),
-    );
-    final list = find.byType(ListView).first;
-    final scrollable = find
-        .descendant(of: list, matching: find.byType(Scrollable))
-        .first;
-    final state = tester.state<ScrollableState>(scrollable);
-    await controller.processEvent(live, {
-      'op': 'slidenav',
-      'slide': {'si': 28},
+  for (final pages in [8, 30]) {
+    testWidgets('$pages页课件跟随时中段置顶、尾段自然到底，手动浏览和关闭跟随不受影响', (tester) async {
+      final controller = _Controller(), live = _live(pages: pages);
+      controller.classrooms[live.lesson.id] = live;
+      await _mount(
+        tester,
+        LivePage(controller: controller, classroom: live),
+        const Size(1280, 800),
+      );
+      final list = find.byType(ListView).first;
+      final scrollable = find
+          .descendant(of: list, matching: find.byType(Scrollable))
+          .first;
+      final state = tester.state<ScrollableState>(scrollable);
+      final pane = tester.getRect(scrollable);
+      final middlePage = pages == 8 ? 2 : 8;
+      final tailPage = pages == 8 ? 7 : 28;
+
+      await controller.processEvent(live, {
+        'op': 'slidenav',
+        'slide': {'si': middlePage},
+      });
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .getRect(find.byKey(ValueKey('live-thumbnail-${middlePage - 1}')))
+            .top,
+        closeTo(pane.top, 1),
+      );
+
+      await controller.processEvent(live, {
+        'op': 'slidenav',
+        'slide': {'si': tailPage},
+      });
+      await tester.pumpAndSettle();
+      final selected = find.byKey(ValueKey('live-thumbnail-${tailPage - 1}'));
+      final last = find.byKey(ValueKey('live-thumbnail-${pages - 1}'));
+      expect(selected, findsOneWidget);
+      expect(tester.getRect(selected).top, greaterThan(pane.top));
+      expect(tester.getRect(selected).bottom, lessThan(pane.bottom));
+      expect(state.position.pixels, closeTo(state.position.maxScrollExtent, 1));
+      expect(
+        tester.getRect(last).bottom,
+        closeTo(pane.bottom - 16, 1),
+        reason: '尾页只保留常规16像素边距，不填充大片空白',
+      );
+
+      await tester.drag(list, const Offset(0, 260));
+      await tester.pumpAndSettle();
+      final manualOffset = state.position.pixels;
+      expect(live.followTeacher, isTrue);
+      controller.pulse();
+      await tester.pumpAndSettle();
+      expect(state.position.pixels, manualOffset, reason: '普通刷新不拉回选中页');
+      controller.followTeacher(live, false);
+      await controller.processEvent(live, {
+        'op': 'slidenav',
+        'slide': {'si': middlePage},
+      });
+      await tester.pumpAndSettle();
+      expect(state.position.pixels, manualOffset);
+      controller.followTeacher(live, true);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .getRect(find.byKey(ValueKey('live-thumbnail-${middlePage - 1}')))
+            .top,
+        closeTo(pane.top, 1),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
     });
-    await tester.pumpAndSettle();
-    final selected = find.byKey(const ValueKey('live-thumbnail-27'));
-    expect(selected, findsOneWidget);
-    final selectedRect = tester.getRect(selected),
-        pane = tester.getRect(scrollable);
-    expect(selectedRect.top, closeTo(pane.top, 1));
-    expect(selectedRect.bottom, lessThan(pane.bottom));
-    await tester.drag(list, const Offset(0, 260));
-    await tester.pumpAndSettle();
-    final manualOffset = state.position.pixels;
-    expect(live.followTeacher, isTrue);
-    controller.pulse();
-    await tester.pumpAndSettle();
-    expect(state.position.pixels, manualOffset, reason: '普通刷新不拉回选中页');
-    controller.followTeacher(live, false);
-    await controller.processEvent(live, {
-      'op': 'slidenav',
-      'slide': {'si': 8},
-    });
-    await tester.pumpAndSettle();
-    expect(state.position.pixels, manualOffset);
-    controller.followTeacher(live, true);
-    await tester.pumpAndSettle();
-    expect(
-      tester.getRect(find.byKey(const ValueKey('live-thumbnail-7'))).top,
-      closeTo(pane.top, 1),
-    );
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox());
-    controller.dispose();
-  });
+  }
 
   testWidgets('预生成答案允许编辑但不能提交，结束和提交状态覆盖旧填充文案', (tester) async {
     final controller = _Controller(), live = _live();

@@ -446,12 +446,7 @@ class _LivePageState extends State<LivePage> {
           child: ListView.builder(
             controller: _previewController,
             primary: false,
-            padding: EdgeInsets.fromLTRB(
-              12,
-              8,
-              8,
-              (constraints.maxHeight - 120).clamp(16.0, double.infinity),
-            ),
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 16),
             itemCount: slides.length + 1,
             itemBuilder: (context, item) {
               if (item == 0) {
@@ -465,7 +460,9 @@ class _LivePageState extends State<LivePage> {
                   _slideKey(live, page),
                   GlobalKey.new,
                 ),
-                padding: const EdgeInsets.only(bottom: 10),
+                padding: EdgeInsets.only(
+                  bottom: page == slides.length - 1 ? 0 : 10,
+                ),
                 child: SizedBox(
                   height: 120,
                   child: SlideThumbnail(
@@ -639,13 +636,6 @@ class _LivePageState extends State<LivePage> {
                       }
                     },
               icon: const Icon(Icons.refresh),
-            ),
-            IconButton(
-              tooltip: '同步我的答案',
-              onPressed: live.syncingAnswers
-                  ? null
-                  : () => widget.controller.syncAnswers(live),
-              icon: const Icon(Icons.sync),
             ),
             PopupMenuButton<String>(
               tooltip: '导出课件',
