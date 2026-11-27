@@ -147,18 +147,18 @@ void main() {
   );
 
   test(
-    'background generation, filling and successful submission report transitions',
+    'background preparation, assignment and successful submission report transitions',
     () async {
       controller.settings.answerMode = AnswerMode.ai;
       final live = await enter();
       expect(
-        notifications.shown.any((event) => event.body == '正在使用 AI 自动作答'),
+        notifications.shown.any((event) => event.body.contains('正在使用 AI 自动作答')),
         true,
       );
       ai.requests['q']!.single.complete('A');
       await settle();
       expect(
-        notifications.shown.any((event) => event.body == '答案已填充，等待开始作答'),
+        notifications.shown.any((event) => event.body.contains('答案已填充，等待开始作答')),
         true,
       );
       await controller.processEvent(live, {
@@ -170,9 +170,21 @@ void main() {
           'limit': 120,
         },
       });
+      await settle();
+      expect(
+        notifications.shown.any(
+          (event) =>
+              event.key == 'u:l:assignment:q' && event.body.contains('老师已布置题目'),
+        ),
+        true,
+      );
       await controller.submitAnswer(live, live.questions['q']!, ['A']);
       await settle();
-      expect(notifications.shown.any((event) => event.body == '答案已提交'), true);
+      expect(
+        notifications.shown.any((event) => event.body.contains('答案已提交')),
+        true,
+      );
+      expect(notifications.active.containsKey('u:l:assignment:q'), isFalse);
       final count = notifications.shown.length;
       controller.followTeacher(live, false);
       controller.followTeacher(live, true);
@@ -291,14 +303,14 @@ void main() {
       notifications.pendingQuestion = Completer<bool>();
       final live = await enter();
       final pendingGeneration = notifications.shown.singleWhere(
-        (event) => event.body == '正在使用 AI 自动作答',
+        (event) => event.body.contains('正在使用 AI 自动作答'),
       );
       await controller.processEvent(live, {'op': 'lessonfinished'});
       await settle();
-      expect(notifications.cancelled, contains(pendingGeneration.key));
       notifications.pendingQuestion!.complete(true);
       ai.requests['q']!.single.complete('A');
       await settle();
+      expect(notifications.cancelled, contains(pendingGeneration.key));
       expect(notifications.active.containsKey(pendingGeneration.key), isFalse);
       expect(
         notifications.shown.where((event) => event.problem.isNotEmpty),

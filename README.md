@@ -2,7 +2,7 @@
 
 普通版雨课堂辅助工具，支持 Android、Windows 和 iOS。
 
-**稳定版 1.1.1** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/latest) · [GPL-3.0](LICENSE)
+**稳定版 1.1.2** · [下载安装包](https://github.com/furryzirui/ykt_helper/releases/latest) · [GPL-3.0](LICENSE)
 
 ## 功能
 
@@ -14,7 +14,7 @@
 - 三种登录方式、权限设置、本机日志查看与导出。
 - 应用自启动：Windows 登录启动，Android 在系统允许范围内开机恢复自动化。
 - 定时关闭后台服务；iOS 支持静音音频、画中画和持续定位后台方案。
-- 后台题目需要手动作答、确认提交或处理失败时提醒。
+- 后台通知课堂签到、题目布置、自动作答及提交结果。
 
 ## 使用
 
@@ -37,7 +37,7 @@ flutter test
 flutter build apk --release
 ```
 
-各平台构建及签名见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification-1.1.1.md)。请勿提交账号凭证或签名私钥。
+各平台构建及签名见 [构建说明](docs/build.md)，测试范围见 [验证记录](docs/verification-1.1.2.md)。请勿提交账号凭证或签名私钥。
 
 ## 许可证
 

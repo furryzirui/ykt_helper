@@ -123,6 +123,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   final Map<String, Object> _eventNoticeTickets = {};
   final Map<String, Future<void>> _eventNoticeFlights = {};
   final Set<String> _activeEventNotices = {};
+  final Set<String> _activeAssignmentNotices = {};
   final bool startTimers, connectSockets;
   final DateTime Function() now;
   final Dio _media = Dio(
@@ -227,9 +228,95 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
   void _notify() {
     if (!_disposed) {
+      _syncAssignmentNotifications();
       _syncQuestionNotifications();
       notifyListeners();
     }
+  }
+
+  void _syncAssignmentNotifications() {
+    final wanted = <String>{};
+    if (!_foreground && !_disposed) {
+      for (final live in classrooms.values) {
+        if (!_valid(live) || live.ended) continue;
+        for (final question in live.questions.values) {
+          if (!canSubmitAnswer(live, question)) continue;
+          final key =
+              '${live.session.userId}:${live.lesson.id}:assignment:${question.id}';
+          wanted.add(key);
+          final state = live.autoStates[question.id] ?? '';
+          final String body, token;
+          if (settings.autoAnswer && settings.autoSubmit) {
+            final deadline = automaticSubmissionDeadline(live, question);
+            final seconds = automaticSubmissionRemainingSeconds(live, question);
+            if (deadline != null && seconds != null) {
+              body = '老师已布置题目，将在 $seconds 秒后自动提交';
+              token = 'automatic:${deadline.millisecondsSinceEpoch}';
+            } else if (state.contains('等待前题')) {
+              body = '老师已布置题目，等待前题提交后自动提交';
+              token = 'queued';
+            } else if (state.startsWith('自动答题未完成') ||
+                state.contains('等待补全') ||
+                state.contains('等待修改') ||
+                state.contains('已取消自动提交') ||
+                state.startsWith('自动提交等待同步')) {
+              body = '老师已布置题目，自动提交尚未就绪，请打开课堂检查';
+              token = 'attention';
+            } else {
+              body = '老师已布置题目，正在准备答案，准备完成后按延迟自动提交';
+              token = 'preparing';
+            }
+          } else if (settings.autoAnswer &&
+              live.draftAnswers.containsKey(question.id)) {
+            body = '老师已布置题目，答案已填充，请确认提交';
+            token = 'confirm';
+          } else if (settings.autoAnswer) {
+            body = '老师已布置题目，正在准备答案，完成后请确认提交';
+            token = 'preparingManual';
+          } else {
+            body = '老师已布置题目，请打开课堂作答';
+            token = 'manual';
+          }
+          if (_activeAssignmentNotices.add(key)) {
+            _dismissClassroomProgress(live, problemId: question.id);
+          }
+          _reportLessonEvent(
+            live.lesson,
+            live.session.userId,
+            'assigned',
+            body,
+            question: question,
+            token: token,
+            namespace: 'assignment',
+            current: () => _valid(live) && canSubmitAnswer(live, question),
+          );
+        }
+      }
+    }
+    for (final key in _activeAssignmentNotices.difference(wanted).toList()) {
+      _activeAssignmentNotices.remove(key);
+      _dismissNoticeKey(key);
+    }
+  }
+
+  Future<void> _dismissNoticeKey(String key) {
+    _activeEventNotices.remove(key);
+    _eventNoticeTickets.remove(key);
+    final pending = _eventNoticeFlights[key] ?? Future<void>.value();
+    final canceled = pending
+        .catchError((Object _) {})
+        .then((_) => notifications.cancel(key))
+        .catchError((Object _) {});
+    _eventNoticeFlights[key] = canceled;
+    return canceled;
+  }
+
+  Future<void> _dismissAssignment(LiveClass live, String problemId) {
+    if (!_valid(live)) return Future<void>.value();
+    final key =
+        '${live.session.userId}:${live.lesson.id}:assignment:$problemId';
+    _activeAssignmentNotices.remove(key);
+    return _dismissNoticeKey(key);
   }
 
   void _syncQuestionNotifications() {
@@ -248,14 +335,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
               state.contains('已取消自动提交') ||
               state.contains('等待补全') ||
               state.contains('等待修改');
-          final kind = failed
-              ? 'attention'
-              : !settings.autoAnswer
-              ? 'answer'
-              : !settings.autoSubmit &&
-                    live.draftAnswers.containsKey(question.id)
-              ? 'submit'
-              : null;
+          final kind = failed ? 'attention' : null;
           if (kind == null) continue;
           final eventKey =
               '${live.session.userId}:${live.lesson.id}:event:${question.id}';
@@ -301,7 +381,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       final delivered = await notifications.show(
         key: key,
         title: live.lesson.title,
-        body: body,
+        body: _questionNotificationBody(live, question, body),
         lessonId: live.lesson.id,
         problemId: question.id,
       );
@@ -322,6 +402,25 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  String _questionNotificationBody(
+    LiveClass live,
+    Question question,
+    String body,
+  ) {
+    final current = live.currentPresentation;
+    final decks = [
+      if (current != null) current,
+      ...live.presentations.values.where((deck) => !identical(deck, current)),
+    ];
+    for (final deck in decks) {
+      final page = deck.slides.indexWhere(
+        (slide) => slide.question?.id == question.id,
+      );
+      if (page >= 0) return '第 ${page + 1} 页题目：$body';
+    }
+    return '题目 ${question.id}：$body';
+  }
+
   void _reportClassroomEvent(
     LiveClass live,
     String kind,
@@ -330,6 +429,14 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     String token = '',
   }) {
     if (!_valid(live)) return;
+    if (question != null &&
+        const {'generating', 'draftFilled', 'autoSubmitting'}.contains(kind) &&
+        canSubmitAnswer(live, question) &&
+        _activeAssignmentNotices.contains(
+          '${live.session.userId}:${live.lesson.id}:assignment:${question.id}',
+        )) {
+      return;
+    }
     _reportLessonEvent(
       live.lesson,
       live.session.userId,
@@ -348,10 +455,17 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     String body, {
     Question? question,
     String token = '',
+    String namespace = 'event',
     required bool Function() current,
   }) {
     if (_foreground || _disposed || !current()) return;
-    final key = '$userId:${lesson.id}:event:${question?.id ?? 'classroom'}';
+    final live = classrooms[lesson.id];
+    final notificationBody =
+        question != null && live != null && live.session.userId == userId
+        ? _questionNotificationBody(live, question, body)
+        : body;
+    final key =
+        '$userId:${lesson.id}:$namespace:${question?.id ?? 'classroom'}';
     final state = '$kind:${question?.dt ?? 0}:$token';
     if (_eventNoticeStates[key] == state) return;
     final ticket = Object();
@@ -372,7 +486,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
             final delivered = await notifications.show(
               key: key,
               title: lesson.title,
-              body: body,
+              body: notificationBody,
               lessonId: lesson.id,
               problemId: question?.id ?? '',
             );
@@ -403,10 +517,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _dismissEventNotifications() {
-    for (final key in _activeEventNotices) {
-      unawaited(notifications.cancel(key));
+    for (final key in _activeEventNotices.toList()) {
+      unawaited(_dismissNoticeKey(key));
     }
     _activeEventNotices.clear();
+    _activeAssignmentNotices.clear();
   }
 
   void _dismissClassroomProgress(LiveClass live, {String? problemId}) {
@@ -420,9 +535,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         )
         .toList();
     for (final key in keys) {
-      _activeEventNotices.remove(key);
-      _eventNoticeTickets.remove(key);
-      unawaited(notifications.cancel(key));
+      unawaited(_dismissNoticeKey(key));
     }
   }
 
@@ -461,6 +574,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       unawaited(_resumeClassroomWork(revision));
     }
     _syncQuestionNotifications();
+    _syncAssignmentNotifications();
   }
 
   void _pauseClassroomWork() {
@@ -2398,7 +2512,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     _notify();
     try {
       await api.submit(live.session, latest, answer);
-      _reportClassroomEvent(live, 'submitted', '答案已提交', question: latest);
       logs.add(
         AppLogEvent.submit,
         success: true,
@@ -2469,6 +2582,13 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       _driveAutomaticQueue(live);
       _notify();
     }
+    unawaited(
+      _dismissAssignment(live, question.id).then((_) {
+        if (_valid(live)) {
+          _reportClassroomEvent(live, 'submitted', '答案已提交', question: latest);
+        }
+      }),
+    );
     await _syncAfterSuccessfulSubmission(live, latest);
   }
 
