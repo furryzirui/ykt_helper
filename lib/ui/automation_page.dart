@@ -150,6 +150,7 @@ class _AutomationPageState extends State<AutomationPage>
       'slidePrompt': source.slidePrompt,
       'submitDelay': '${source.autoSubmitDelaySeconds}',
       'aiRequestInterval': '${source.aiRequestIntervalSeconds}',
+      'aiMaxRetries': '${source.aiMaxRetries}',
     };
     for (final entry in _fields.entries) {
       entry.value.text = values[entry.key] ?? '';
@@ -162,7 +163,8 @@ class _AutomationPageState extends State<AutomationPage>
       AppSettings.fromJson(value.toJson())
         ..customPrompt = value.customPrompt
         ..autoSubmitDelaySeconds = value.autoSubmitDelaySeconds
-        ..aiRequestIntervalSeconds = value.aiRequestIntervalSeconds;
+        ..aiRequestIntervalSeconds = value.aiRequestIntervalSeconds
+        ..aiMaxRetries = value.aiMaxRetries;
 
   static bool _sameSettings(AppSettings first, AppSettings second) =>
       jsonEncode(first.toJson()) == jsonEncode(second.toJson());
@@ -191,6 +193,9 @@ class _AutomationPageState extends State<AutomationPage>
     if (value.aiRequestIntervalSeconds < 0 ||
         value.aiRequestIntervalSeconds > 3600) {
       return 'AI 请求间隔请输入 0–3600 秒';
+    }
+    if (value.aiMaxRetries < 0 || value.aiMaxRetries > 10) {
+      return 'AI 重试次数请输入 0–10 次';
     }
     // Inactive answer settings must not block sign-in or startup preferences.
     if (!value.autoAnswer) return null;
@@ -1297,7 +1302,6 @@ class _AutomationPageState extends State<AutomationPage>
                             ),
                         ],
                       ],
-                      const Divider(height: 1),
                       Padding(
                         key: const ValueKey('input-aiRequestInterval'),
                         padding: const EdgeInsets.only(top: 16, bottom: 8),
@@ -1315,12 +1319,44 @@ class _AutomationPageState extends State<AutomationPage>
                           decoration: const InputDecoration(
                             labelText: 'AI 请求间隔',
                             suffixText: '秒',
-                            helperText: '上次请求完成后的等待时间，0–3600 秒；0 表示仅串行',
+                            helperText: '上次请求完成的等待时间，若请求出现429错误可适当调高',
                             helperMaxLines: 3,
                             prefixIcon: Icon(Icons.hourglass_bottom_rounded),
                           ),
                           onChanged: (value) => _edit(
                             () => settings.aiRequestIntervalSeconds =
+                                int.tryParse(value) ?? -1,
+                            text: true,
+                          ),
+                          onEditingComplete: () {
+                            FocusScope.of(context).unfocus();
+                            unawaited(_flushSaves());
+                          },
+                        ),
+                      ),
+                      Padding(
+                        key: const ValueKey('input-aiMaxRetries'),
+                        padding: const EdgeInsets.only(top: 8, bottom: 8),
+                        child: TextField(
+                          key: const ValueKey('field-aiMaxRetries'),
+                          enabled: !_disabled,
+                          controller: _field(
+                            'aiMaxRetries',
+                            '${settings.aiMaxRetries}',
+                          ),
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: 'AI 重试次数',
+                            suffixText: '次',
+                            helperText: '请求限流后的重试次数，0 表示不重试',
+                            helperMaxLines: 3,
+                            prefixIcon: Icon(Icons.replay_rounded),
+                          ),
+                          onChanged: (value) => _edit(
+                            () => settings.aiMaxRetries =
                                 int.tryParse(value) ?? -1,
                             text: true,
                           ),

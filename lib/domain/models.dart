@@ -1,3 +1,7 @@
+import 'rain_server.dart';
+
+export 'rain_server.dart';
+
 typedef Json = Map<String, dynamic>;
 
 Json object(dynamic value) => value is Map
@@ -71,13 +75,15 @@ class LessonPage {
 
 class ClassroomSession {
   final String userId, lessonId, bearer, lessonToken;
+  final RainServer server;
   const ClassroomSession({
     required this.userId,
     required this.lessonId,
     required this.bearer,
     required this.lessonToken,
+    this.server = RainServer.standard,
   });
-  String get key => '$userId:$lessonId';
+  String get key => '${server.name}:$userId:$lessonId';
 }
 
 class Question {
@@ -300,7 +306,7 @@ class AppSettings {
       autoAnswer,
       autoSubmit;
   int autoSubmitDelaySeconds;
-  int aiRequestIntervalSeconds;
+  int aiRequestIntervalSeconds, aiMaxRetries;
   int serviceTimeoutMinutes;
   BackgroundServiceMode backgroundMode;
   String? iosBackgroundConsentMode;
@@ -319,7 +325,8 @@ class AppSettings {
     this.autoAnswer = false,
     this.autoSubmit = false,
     this.autoSubmitDelaySeconds = 30,
-    this.aiRequestIntervalSeconds = 3,
+    this.aiRequestIntervalSeconds = 0,
+    this.aiMaxRetries = 3,
     this.serviceTimeoutMinutes = 0,
     this.backgroundMode = BackgroundServiceMode.silentAudio,
     this.iosBackgroundConsentMode,
@@ -413,7 +420,8 @@ class AppSettings {
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
     autoSubmitDelaySeconds: integer(json['autoSubmitDelaySeconds'], 30),
-    aiRequestIntervalSeconds: integer(json['aiRequestIntervalSeconds'], 3),
+    aiRequestIntervalSeconds: integer(json['aiRequestIntervalSeconds'], 0),
+    aiMaxRetries: integer(json['aiMaxRetries'], 3),
     serviceTimeoutMinutes:
         serviceTimeoutOptions.contains(json['serviceTimeoutMinutes'])
         ? integer(json['serviceTimeoutMinutes'])
@@ -469,6 +477,7 @@ class AppSettings {
     'autoSubmit': autoSubmit,
     'autoSubmitDelaySeconds': autoSubmitDelaySeconds,
     'aiRequestIntervalSeconds': aiRequestIntervalSeconds,
+    'aiMaxRetries': aiMaxRetries,
     'serviceTimeoutMinutes': serviceTimeoutMinutes,
     'backgroundMode': backgroundMode.name,
     'iosBackgroundConsentMode': iosBackgroundConsentMode,

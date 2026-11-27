@@ -1,4 +1,4 @@
-# 普通版雨课堂协议核对
+# 雨课堂协议核对
 
 初次协议核对日期：2026-11-13；功能调整：2026-11-14。新项目独立编写；以下源码用于核对接口、字段与行为，未复制上游实现。
 
@@ -37,7 +37,24 @@ course_helper `lib/api/login.dart`、`lib/api/course.dart` 与 ykt_assistant `do
 | 入课签到 | POST `/api/v3/lesson/checkin` | `{source:21,lessonId,joinIfNotIn:true}` |
 | 动态二维码解析 | POST `/api/v3/app/scan` | `{url}`；`data.value` 为课堂 ID |
 
-账号凭证为响应 Cookie；HTTP 课堂凭证为签到响应头 `set-auth`；WebSocket 凭证为 `data.lessonToken`，两者不能互换。仅允许 HTTPS `www.yuketang.cn`，禁自动重定向；CSRF 从适用路径的 Cookie 获取。Cookie 回调串行保存，退出及新登录轮次使迟到响应无效。图片与七牛上传使用无账号拦截器的独立客户端。
+账号凭证为响应 Cookie；HTTP 课堂凭证为签到响应头 `set-auth`；WebSocket 凭证为 `data.lessonToken`，两者不能互换。仅允许当前所选服务端的 HTTPS 请求，禁自动重定向；CSRF 从适用路径的 Cookie 获取。Cookie 回调串行保存，退出及新登录轮次使迟到响应无效。图片与七牛上传使用无账号拦截器的独立客户端。
+
+### 1.2.0 多服务端核对（2026-11-27）
+
+对照 course_helper 的 `lib/api/api_service.dart`、`lib/platform.dart`、`lib/pages/presentation.dart`，以及 ykt_assistant 的 `RainApi.java`、`HumanVerification.java` 与 API 参考，四个服务使用以下地址：
+
+| 服务 | 认证及业务请求 | WebSocket |
+| --- | --- | --- |
+| 雨课堂 | `https://www.yuketang.cn` | `wss://www.yuketang.cn/wsapp/` |
+| 荷塘雨课堂 | `https://pro.yuketang.cn` | `wss://pro.yuketang.cn/wsapp/` |
+| 长江雨课堂 | `https://changjiang.yuketang.cn` | `wss://changjiang.yuketang.cn/wsapp/` |
+| 黄河雨课堂 | `https://huanghe.yuketang.cn` | `wss://huanghe.yuketang.cn/wsapp/` |
+
+当日仅公开读取四端的 `/v2/web/index` 与 `/lesson/fullscreen/v3/0`，均返回 HTTP 200。四端网页共同加载 `web/1.2.373/js/pc.f7765c0a.js`；课堂共同加载 `lesson/3.3.243/js/fullscreen.c87b04f0a33ef15b1779.js`。官网 PC 资源自身也包含 `www → rain`、`pro → thu`、`changjiang → changjiang`、`huanghe → huanghe` 的部署映射。这证明这些入口和前端资源共用，不能代替四端真实账号的登录与课堂测试。
+
+两上游没有按上述服务切换 v3 登录、课程、签到或答题的接口路径，也没有切换移动请求头：统一使用 `xtbz:ykt`、`xtua:client=app&tag=1.3.3&platform=Android`、`buildnumber:1610`。网页内部的部署标签不能据此直接替换移动接口的 `xtbz`。腾讯人机验证 App ID 均为 `2091064951`。动态课堂扫码仍将原始二维码内容作为 `{url}` 提交到所选服务的 `/api/v3/app/scan`；不在本地猜测跨服务课堂 ID。
+
+新实现把服务绑定到不可变的 RainApi 实例及课堂凭证。认证请求只允许实例对应的 HTTPS 主机，拒绝重定向及其他服务的课堂 Bearer；WebSocket 跟随课堂凭证绑定的服务。每个实例独立 CookieJar，恢复 Cookie 时拒绝兄弟服务域名；兼容官方父域 Cookie，但不会复用到另一个服务实例。切换服务由 controller 结束原会话后重新创建实例，凭证持久化按服务隔离，避免相同用户或课堂 ID 相撞。七牛上传沿用独立且无账号 Cookie 的客户端。
 
 官网 `pc.3518d2db.js` 新版实时列表使用 `/api/v3/classroom/on-lesson-upcoming-exam`，其 `getOnLesson` 的 `onLessonClassrooms` 条目由 `openFullscreen` 读取 `courseId/classroomId/lessonId`。为兼容已在上游使用的 `/on-lesson` 响应，新项目仅在关联 ID 缺失时用当前 `lesson_id` 的 `lesson-info` 补全，同时校验已有 ID。扫码进入同样通过 `lesson-info` 获取正式课程、班级 ID，不能从课堂 ID 猜测。
 

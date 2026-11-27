@@ -31,7 +31,7 @@ class LiveConnection {
     onStatus(_attempt == 0 ? '正在连接课堂' : '正在重新连接课堂');
     try {
       final socket = await socketFactory(
-        'wss://www.yuketang.cn/wsapp/',
+        session.server.websocketUri.toString(),
       ).timeout(const Duration(seconds: 20));
       if (_closed || epoch != _epoch) {
         await socket.close();

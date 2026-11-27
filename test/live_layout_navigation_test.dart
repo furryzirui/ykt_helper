@@ -210,6 +210,12 @@ void main() {
     expect(find.text('课堂题目'), findsNothing);
     expect(find.byType(ExpansionTile), findsNothing);
     expect(find.text('不属于本课件的题目'), findsNothing);
+    await tester.dragFrom(
+      tester.getTopLeft(find.byKey(const ValueKey('live-slide-feed'))) +
+          const Offset(24, 180),
+      const Offset(0, -650),
+    );
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('live-slide-s2-2')),
       300,
@@ -222,7 +228,63 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(live.followTeacher, isTrue, reason: '手动浏览不关闭教师跟随');
+    expect(live.followTeacher, isFalse, reason: '手动滑动至其他页后关闭教师跟随');
+    expect(live.teacherSlideIndex, 0, reason: '浏览页变化不改写教师实际页');
+    controller.followTeacher(live, true);
+    await tester.pumpAndSettle();
+    await controller.processEvent(live, {
+      'op': 'slidenav',
+      'slide': {'si': 3},
+    });
+    await tester.pumpAndSettle();
+    expect(live.followTeacher, isTrue, reason: '教师引发的程序滚动不能关闭跟随');
+    expect(live.teacherSlideIndex, 2);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('手机触碰其他页题目或继续编辑会关闭跟随，教师页标记保持独立', (tester) async {
+    final controller = _Controller(), live = _live();
+    controller.classrooms[live.lesson.id] = live;
+    await _mount(
+      tester,
+      LivePage(controller: controller, classroom: live),
+      const Size(390, 840),
+    );
+    final scrollable = tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('live-slide-feed')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    scrollable.position.jumpTo(scrollable.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    final laterAnswer = find.descendant(
+      of: find.byKey(const ValueKey('q-later')),
+      matching: find.byType(TextField),
+    );
+    await tester.ensureVisible(laterAnswer);
+    await tester.pumpAndSettle();
+    expect(live.followTeacher, isTrue, reason: '程序定位本身不当作手动浏览');
+    await tester.tap(laterAnswer);
+    await tester.pump();
+    expect(live.followTeacher, isFalse);
+    expect(live.slideIndex, 2);
+    expect(live.teacherSlideIndex, 0);
+    controller.followTeacher(live, true);
+    await tester.pumpAndSettle();
+    scrollable.position.jumpTo(scrollable.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(laterAnswer);
+    await tester.pumpAndSettle();
+    await tester.enterText(laterAnswer, '继续编辑其他页');
+    await tester.pump();
+    expect(live.followTeacher, isFalse);
+    expect(live.teacherSlideIndex, 0);
+    expect(live.draftAnswers['q-later'], containsPair('content', '继续编辑其他页'));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     controller.dispose();

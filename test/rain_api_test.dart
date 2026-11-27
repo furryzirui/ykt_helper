@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -40,9 +41,11 @@ ResponseBody ok(dynamic data) => reply({'code': 0, 'data': data});
 RainApi client(
   FakeTransport transport, {
   Future<void> Function(String)? changed,
+  RainServer server = RainServer.standard,
 }) {
   final dio = Dio()..httpClientAdapter = transport;
-  return RainApi(dio: dio, onCookiesChanged: changed)..userId = 'u';
+  return RainApi(dio: dio, server: server, onCookiesChanged: changed)
+    ..userId = 'u';
 }
 
 const course = Course(courseId: 'c', classroomId: 'r', name: '课程');
@@ -54,6 +57,157 @@ const session = ClassroomSession(
 );
 
 void main() {
+  for (final server in RainServer.values) {
+    test(
+      '${server.name} keeps login and classroom requests on its host',
+      () async {
+        final transport = FakeTransport((r) {
+          expect(r.uri.scheme, 'https');
+          expect(r.uri.host, server.host);
+          expect(r.headers['xtbz'], 'ykt');
+          expect(r.headers['xtua'], 'client=app&tag=1.3.3&platform=Android');
+          if (r.uri.path.endsWith('/pre-info')) {
+            return ok({'token': 'qr', 'qrContent': 'official-qr'});
+          }
+          if (r.uri.path == '/v/course_meta/user_info') {
+            return ok({
+              'user_profile': {'user_id': 'u', 'name': '同名用户'},
+            });
+          }
+          if (r.uri.path.endsWith('/checkin')) {
+            return reply(
+              {
+                'code': 0,
+                'data': {'lessonId': 'l', 'lessonToken': 'ws'},
+              },
+              headers: {
+                'set-auth': ['Bearer http'],
+              },
+            );
+          }
+          if (r.uri.path == '/api/v3/app/scan') {
+            expect(r.data, {'url': 'https://${server.host}/lesson/qr'});
+            return ok({'value': 'l'});
+          }
+          expect(r.headers['Authorization'], 'Bearer http');
+          if (r.uri.path.endsWith('/eligibility')) return ok({'signed': true});
+          if (r.uri.path.endsWith('/fetch')) return ok({'slides': []});
+          return reply({'code': 0});
+        });
+        final api = client(transport, server: server);
+        await api.createQr();
+        await api.profile();
+        final classroom = await api.checkin('l');
+        expect(classroom.server, server);
+        expect(classroom.key, '${server.name}:u:l');
+        expect(
+          await api.scanClassroom('https://${server.host}/lesson/qr'),
+          'l',
+        );
+        expect((await api.locationStatus(classroom)).signed, true);
+        expect(
+          (await api.presentation(
+            'l',
+            'p',
+            session: classroom,
+            withAnswers: false,
+          )).slides,
+          isEmpty,
+        );
+        await api.submit(
+          classroom,
+          const Question(id: 'q', body: '', type: 1),
+          ['A'],
+        );
+        expect(transport.requests.length, 7);
+      },
+    );
+  }
+
+  test(
+    'same account and lesson on different deployments have different keys',
+    () {
+      final keys = RainServer.values.map(
+        (server) => ClassroomSession(
+          userId: 'u',
+          lessonId: 'l',
+          bearer: 'http',
+          lessonToken: 'ws',
+          server: server,
+        ).key,
+      );
+      expect(keys.toSet(), hasLength(4));
+      expect(RainServer.fromName('unknown'), RainServer.standard);
+      expect(RainServer.fromName('changjiang'), RainServer.changjiang);
+    },
+  );
+
+  test(
+    'sibling deployments cannot receive restored cookies or classroom tokens',
+    () async {
+      final transport = FakeTransport((r) => ok({}));
+      final api = client(transport, server: RainServer.changjiang);
+      await expectLater(
+        api.restoreCookies(
+          jsonEncode([
+            'sessionid=other; Domain=www.yuketang.cn; Path=/; Secure',
+          ]),
+        ),
+        throwsA(isA<ApiFailure>()),
+      );
+      api.userId = 'u';
+      await expectLater(
+        api.submit(session, const Question(id: 'q', body: '', type: 1), ['A']),
+        throwsA(isA<ApiFailure>()),
+      );
+      await expectLater(
+        api.locationStatus(session),
+        throwsA(isA<ApiFailure>()),
+      );
+      await expectLater(
+        api.uploadImage(session, 'unused'),
+        throwsA(isA<ApiFailure>()),
+      );
+      await expectLater(
+        api.dio.get('https://www.yuketang.cn/v/course_meta/user_info'),
+        throwsA(isA<DioException>()),
+      );
+      expect(transport.requests, isEmpty);
+    },
+  );
+
+  test(
+    'deployment instances keep even parent-domain cookies isolated',
+    () async {
+      final firstTransport = FakeTransport((r) {
+        expect(r.headers['sessionid'], 'first');
+        expect(r.headers['x-csrftoken'], 'csrf-first');
+        return ok({
+          'user_profile': {'user_id': 'u'},
+        });
+      });
+      final secondTransport = FakeTransport((r) {
+        expect(r.headers['sessionid'], isNull);
+        expect(r.headers['x-csrftoken'], isNull);
+        expect(r.headers[HttpHeaders.cookieHeader], isNull);
+        return ok({
+          'user_profile': {'user_id': 'u'},
+        });
+      });
+      final first = client(firstTransport, server: RainServer.changjiang);
+      final second = client(secondTransport, server: RainServer.huanghe);
+      await first.restoreCookies(
+        jsonEncode([
+          'sessionid=first; Domain=.yuketang.cn; Path=/; Secure',
+          'csrftoken=csrf-first; Domain=.yuketang.cn; Path=/; Secure',
+        ]),
+      );
+      await first.profile();
+      await second.profile();
+      expect(jsonDecode(await second.exportCookies()), isEmpty);
+    },
+  );
+
   test(
     'request diagnostics preserve timeout stage without request secrets',
     () async {

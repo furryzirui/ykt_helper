@@ -147,8 +147,11 @@ class _LivePageState extends State<LivePage> {
       _previewController = ScrollController();
   final _slideKeys = <String, GlobalKey>{},
       _thumbnailKeys = <String, GlobalKey>{};
+  final _feedViewportKey = GlobalKey();
   String? _followedPage;
   int _scrollRevision = 0;
+  bool _mobileUserScrolling = false;
+  bool _mobileScrollReadScheduled = false;
 
   @override
   void dispose() {
@@ -214,6 +217,44 @@ class _LivePageState extends State<LivePage> {
     if (_previewController.hasClients) {
       unawaited(_scrollToPage(live, page, preview: true));
     }
+  }
+
+  void _browseMobilePage(LiveClass live, int page) {
+    if (live.followTeacher && page == live.teacherSlideIndex) return;
+    if (live.followTeacher || live.slideIndex != page) {
+      widget.controller.selectSlide(live, page);
+    }
+  }
+
+  void _readMobileScrollPage(LiveClass live) {
+    final viewport = _feedViewportKey.currentContext?.findRenderObject();
+    if (viewport is! RenderBox || !viewport.hasSize) return;
+    final top = viewport.localToGlobal(Offset.zero).dy;
+    final readingLine = top + viewport.size.height * .5;
+    final slides = live.currentPresentation?.slides ?? <domain.Slide>[];
+    for (var page = 0; page < slides.length; page++) {
+      final render = _slideKeys[_slideKey(live, page)]?.currentContext
+          ?.findRenderObject();
+      if (render is! RenderBox || !render.hasSize) continue;
+      final pageTop = render.localToGlobal(Offset.zero).dy;
+      if (pageTop <= readingLine &&
+          pageTop + render.size.height > readingLine) {
+        _browseMobilePage(live, page);
+        return;
+      }
+    }
+  }
+
+  void _scheduleMobileScrollRead(LiveClass live) {
+    if (_mobileScrollReadScheduled) return;
+    _mobileScrollReadScheduled = true;
+    final revision = _scrollRevision;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _mobileScrollReadScheduled = false;
+      if (mounted && revision == _scrollRevision) {
+        _readMobileScrollPage(live);
+      }
+    });
   }
 
   domain.Question? _questionFor(LiveClass live, domain.Slide slide) {
@@ -515,131 +556,160 @@ class _LivePageState extends State<LivePage> {
     final presentation = live.currentPresentation;
     final slides = presentation?.slides ?? <domain.Slide>[];
     _followPage(live, preview: false);
-    return NotificationListener<ScrollStartNotification>(
+    return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
-        if (notification.dragDetails != null) _scrollRevision++;
+        if (notification.depth != 0 ||
+            notification.metrics.axis != Axis.vertical) {
+          return false;
+        }
+        if (notification is ScrollStartNotification) {
+          _mobileUserScrolling = notification.dragDetails != null;
+          if (_mobileUserScrolling) _scrollRevision++;
+        } else if (_mobileUserScrolling &&
+            (notification is ScrollUpdateNotification ||
+                notification is ScrollEndNotification)) {
+          _scheduleMobileScrollRead(live);
+        }
+        if (notification is ScrollEndNotification) {
+          _mobileUserScrolling = false;
+        }
         return false;
       },
-      child: ListView.builder(
-        key: const ValueKey('live-slide-feed'),
-        controller: _feedController,
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-        itemCount: slides.length + 1,
-        itemBuilder: (context, item) {
-          if (item == 0) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _summary(live),
-                const Divider(height: 24),
-                if (slides.isEmpty)
-                  const SizedBox(
-                    height: 200,
-                    child: Center(child: Text('等待教师展示课件')),
-                  ),
-              ],
-            );
-          }
-          final page = item - 1;
-          final slide = slides[page];
-          final question = _questionFor(live, slide);
-          final teacherCurrent = !live.ended && page == live.teacherSlideIndex;
-          final scheme = Theme.of(context).colorScheme;
-          return KeyedSubtree(
-            key: _slideKeys.putIfAbsent(_slideKey(live, page), GlobalKey.new),
-            child: Card(
-              key: ValueKey('live-slide-${slide.id}-$page'),
-              margin: const EdgeInsets.only(bottom: 12),
-              clipBehavior: Clip.antiAlias,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-                side: BorderSide(
-                  color: teacherCurrent
-                      ? scheme.primary
-                      : scheme.outlineVariant,
-                  width: teacherCurrent ? 3 : 1,
-                ),
-              ),
-              child: Column(
+      child: SizedBox(
+        key: _feedViewportKey,
+        child: ListView.builder(
+          key: const ValueKey('live-slide-feed'),
+          controller: _feedController,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+          itemCount: slides.length + 1,
+          itemBuilder: (context, item) {
+            if (item == 0) {
+              return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Row(
-                            children: [
-                              if (teacherCurrent) ...[
-                                Tooltip(
-                                  message: '教师当前页',
-                                  child: Icon(
-                                    Icons.sensors,
-                                    size: 16,
-                                    color: scheme.primary,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                              ],
-                              Flexible(
-                                child: Text(
-                                  '第 ${page + 1} 页',
-                                  style: Theme.of(context).textTheme.labelSmall
-                                      ?.copyWith(
-                                        color: teacherCurrent
-                                            ? scheme.primary
-                                            : scheme.onSurfaceVariant,
-                                        fontWeight: teacherCurrent
-                                            ? FontWeight.w600
-                                            : null,
-                                      ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (slide.imageUrl.isNotEmpty)
-                          IconButton(
-                            tooltip:
-                                defaultTargetPlatform == TargetPlatform.windows
-                                ? '保存图片'
-                                : '保存到系统相册',
-                            visualDensity: VisualDensity.compact,
-                            constraints: const BoxConstraints.tightFor(
-                              width: 36,
-                              height: 32,
-                            ),
-                            padding: EdgeInsets.zero,
-                            iconSize: 18,
-                            onPressed: _exporting
-                                ? null
-                                : () => _export('image', selectedSlide: slide),
-                            icon: const Icon(Icons.save_alt_rounded),
-                          )
-                        else
-                          const SizedBox(height: 32),
-                      ],
+                  _summary(live),
+                  const Divider(height: 24),
+                  if (slides.isEmpty)
+                    const SizedBox(
+                      height: 200,
+                      child: Center(child: Text('等待教师展示课件')),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                    child: SlideImage(slide),
-                  ),
-                  if (question != null) ...[
-                    const Divider(height: 1),
-                    QuestionCard(
-                      key: ValueKey(question.id),
-                      controller: widget.controller,
-                      classroom: live,
-                      question: question,
-                      embedded: true,
-                    ),
-                  ],
                 ],
+              );
+            }
+            final page = item - 1;
+            final slide = slides[page];
+            final question = _questionFor(live, slide);
+            final teacherCurrent =
+                !live.ended && page == live.teacherSlideIndex;
+            final scheme = Theme.of(context).colorScheme;
+            return KeyedSubtree(
+              key: _slideKeys.putIfAbsent(_slideKey(live, page), GlobalKey.new),
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _browseMobilePage(live, page),
+                child: Card(
+                  key: ValueKey('live-slide-${slide.id}-$page'),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  clipBehavior: Clip.antiAlias,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    side: BorderSide(
+                      color: teacherCurrent
+                          ? scheme.primary
+                          : scheme.outlineVariant,
+                      width: teacherCurrent ? 3 : 1,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  if (teacherCurrent) ...[
+                                    Tooltip(
+                                      message: '教师当前页',
+                                      child: Icon(
+                                        Icons.sensors,
+                                        size: 16,
+                                        color: scheme.primary,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Flexible(
+                                    child: Text(
+                                      '第 ${page + 1} 页',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall
+                                          ?.copyWith(
+                                            color: teacherCurrent
+                                                ? scheme.primary
+                                                : scheme.onSurfaceVariant,
+                                            fontWeight: teacherCurrent
+                                                ? FontWeight.w600
+                                                : null,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (slide.imageUrl.isNotEmpty)
+                              IconButton(
+                                tooltip:
+                                    defaultTargetPlatform ==
+                                        TargetPlatform.windows
+                                    ? '保存图片'
+                                    : '保存到系统相册',
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 36,
+                                  height: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                iconSize: 18,
+                                onPressed: _exporting
+                                    ? null
+                                    : () => _export(
+                                        'image',
+                                        selectedSlide: slide,
+                                      ),
+                                icon: const Icon(Icons.save_alt_rounded),
+                              )
+                            else
+                              const SizedBox(height: 32),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                        child: SlideImage(slide),
+                      ),
+                      if (question != null) ...[
+                        const Divider(height: 1),
+                        QuestionCard(
+                          key: ValueKey(question.id),
+                          controller: widget.controller,
+                          classroom: live,
+                          question: question,
+                          embedded: true,
+                          onInteraction: () => _browseMobilePage(live, page),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -717,12 +787,14 @@ class QuestionCard extends StatefulWidget {
   final LiveClass classroom;
   final domain.Question question;
   final bool embedded;
+  final VoidCallback? onInteraction;
   const QuestionCard({
     super.key,
     required this.controller,
     required this.classroom,
     required this.question,
     this.embedded = false,
+    this.onInteraction,
   });
   @override
   State<QuestionCard> createState() => _QuestionCardState();
@@ -825,6 +897,7 @@ class _QuestionCardState extends State<QuestionCard> {
   }
 
   void _draftEdited() {
+    widget.onInteraction?.call();
     final question = widget.question;
     final dynamic answer;
     if (_optionQuestion) {

@@ -5,6 +5,45 @@ import 'package:ykt_helper/data/live_connection.dart';
 import 'package:ykt_helper/domain/models.dart';
 
 void main() {
+  for (final deployment in RainServer.values) {
+    test('${deployment.name} socket uses its session deployment', () async {
+      final local = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final peers = <WebSocket>[];
+      final subscription = local.listen((request) async {
+        final socket = await WebSocketTransformer.upgrade(request);
+        peers.add(socket);
+        socket.listen((_) {});
+      });
+      String? target;
+      final connection = LiveConnection(
+        ClassroomSession(
+          userId: 'u',
+          lessonId: 'l',
+          bearer: 'http',
+          lessonToken: 'ws',
+          server: deployment,
+        ),
+        onEvent: (_) {},
+        onStatus: (_) {},
+        socketFactory: (url) {
+          target = url;
+          return WebSocket.connect('ws://127.0.0.1:${local.port}/wsapp/');
+        },
+      );
+      try {
+        await connection.connect();
+        expect(target, 'wss://${deployment.host}/wsapp/');
+      } finally {
+        await connection.close();
+        for (final peer in peers) {
+          await peer.close();
+        }
+        await subscription.cancel();
+        await local.close(force: true);
+      }
+    });
+  }
+
   test(
     'socket hello uses the target lesson token; refresh creates one new connection',
     () async {

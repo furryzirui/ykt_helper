@@ -53,12 +53,21 @@ class _AiRequest {
   final Future<String> Function() operation;
   final bool Function() isCurrent;
   final Duration Function() interval;
+  final int Function() maxRetries;
   final void Function(AiRequestProgress) progress;
   final result = Completer<String>();
   final canceled = Completer<void>();
   CancelToken? activeToken;
   Timer? watcher;
-  _AiRequest(this.operation, this.isCurrent, this.interval, this.progress);
+  _AiRequest(
+    this.operation,
+    this.isCurrent,
+    this.interval,
+    this.maxRetries,
+    this.progress,
+  );
+
+  int get retryLimit => maxRetries().clamp(0, 10);
 
   bool get valid => !canceled.isCompleted && isCurrent();
 
@@ -97,7 +106,22 @@ class AiRequestScheduler {
   }
 
   static const _checkInterval = Duration(milliseconds: 300);
-  final Stopwatch _clock = Stopwatch()..start();
+  final Duration Function() _elapsed;
+  final Future<void> Function(Duration) _wait;
+  AiRequestScheduler({
+    Duration Function()? elapsed,
+    Future<void> Function(Duration)? wait,
+  }) : _elapsed = elapsed ?? _monotonicClock(),
+       _wait = wait ?? _delay;
+
+  static Duration Function() _monotonicClock() {
+    final clock = Stopwatch()..start();
+    return () => clock.elapsed;
+  }
+
+  static Future<void> _delay(Duration duration) =>
+      Future<void>.delayed(duration);
+  static int _defaultRetries() => 3;
   final List<_AiRequest> _queue = [];
   bool _running = false;
   int? _lastRequestCompletedMs;
@@ -107,9 +131,16 @@ class AiRequestScheduler {
     required Future<String> Function() request,
     required bool Function() isCurrent,
     required Duration Function() interval,
+    int Function() maxRetries = _defaultRetries,
     required void Function(AiRequestProgress) onProgress,
   }) {
-    final job = _AiRequest(request, isCurrent, interval, onProgress);
+    final job = _AiRequest(
+      request,
+      isCurrent,
+      interval,
+      maxRetries,
+      onProgress,
+    );
     if (!job.valid) return Future.error(const AiGenerationCanceled());
     _queue.add(job);
     job.watcher = Timer.periodic(_checkInterval, (_) {
@@ -148,8 +179,9 @@ class AiRequestScheduler {
   Future<String> _execute(_AiRequest job) async {
     var retry = 0;
     var rateLimited = false;
+    AiRateLimitFailure? lastRateLimit;
     while (true) {
-      await _waitForSlot(job, retry, rateLimited);
+      await _waitForSlot(job, retry, rateLimited, lastRateLimit);
       if (!job.valid) throw const AiGenerationCanceled();
       final token = CancelToken();
       job.activeToken = token;
@@ -172,12 +204,19 @@ class AiRequestScheduler {
         ]);
       } on AiRateLimitFailure catch (failure) {
         if (!job.valid) throw const AiGenerationCanceled();
+        lastRateLimit = failure;
         final backoff =
             failure.retryAfter ??
-            Duration(seconds: 5 << (retry < 3 ? retry : 2));
-        final next = _clock.elapsedMilliseconds + backoff.inMilliseconds;
+            Duration(
+              seconds: retry == 0
+                  ? 5
+                  : retry == 1
+                  ? 10
+                  : 20,
+            );
+        final next = _elapsed().inMilliseconds + backoff.inMilliseconds;
         if (next > _rateLimitNotBeforeMs) _rateLimitNotBeforeMs = next;
-        if (retry == 3) {
+        if (retry >= job.retryLimit) {
           job.emit(
             AiRequestProgress(AiRequestPhase.retryExhausted, retry: retry),
           );
@@ -190,25 +229,36 @@ class AiRequestScheduler {
         // launch another HTTP request. Uncancelable fakes may finish later, but
         // their result is already ignored by the controller/session guard.
         if (transport != null) await transport;
-        _lastRequestCompletedMs = _clock.elapsedMilliseconds;
+        _lastRequestCompletedMs = _elapsed().inMilliseconds;
         job.activeToken = null;
       }
     }
   }
 
-  Future<void> _waitForSlot(_AiRequest job, int retry, bool rateLimited) async {
+  Future<void> _waitForSlot(
+    _AiRequest job,
+    int retry,
+    bool rateLimited,
+    AiRateLimitFailure? lastRateLimit,
+  ) async {
     var previousSeconds = -1;
     while (true) {
       if (!job.valid) {
         job.cancel();
         throw const AiGenerationCanceled();
       }
+      if (lastRateLimit != null && retry > job.retryLimit) {
+        job.emit(
+          AiRequestProgress(AiRequestPhase.retryExhausted, retry: retry - 1),
+        );
+        throw lastRateLimit;
+      }
       final gapMs = job.interval().inMilliseconds.clamp(0, 3600000);
       final intervalAt = (_lastRequestCompletedMs ?? -gapMs) + gapMs;
       final notBeforeMs = intervalAt > _rateLimitNotBeforeMs
           ? intervalAt
           : _rateLimitNotBeforeMs;
-      final remainingMs = notBeforeMs - _clock.elapsedMilliseconds;
+      final remainingMs = notBeforeMs - _elapsed().inMilliseconds;
       if (remainingMs <= 0) return;
       final seconds = (remainingMs / 1000).ceil();
       if (seconds != previousSeconds) {
@@ -222,7 +272,7 @@ class AiRequestScheduler {
         );
       }
       await Future.any<void>([
-        Future<void>.delayed(
+        _wait(
           Duration(
             milliseconds: remainingMs < _checkInterval.inMilliseconds
                 ? remainingMs

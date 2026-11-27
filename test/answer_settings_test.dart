@@ -62,7 +62,8 @@ void main() {
     expect(fresh.fixedSubjectiveAnswer, '不会');
     expect(fresh.slidePrompt, defaultSlidePrompt);
     expect(fresh.appAutoStart, isFalse);
-    expect(fresh.aiRequestIntervalSeconds, 3);
+    expect(fresh.aiRequestIntervalSeconds, 0);
+    expect(fresh.aiMaxRetries, 3);
     final saved = AppSettings(
       fixedSingleAnswer: 'B',
       fixedMultipleAnswer: 'AC',
@@ -71,6 +72,7 @@ void main() {
       slidePrompt: '参考附件的定义',
       appAutoStart: true,
       aiRequestIntervalSeconds: 0,
+      aiMaxRetries: 0,
     );
     final restored = AppSettings.fromJson(saved.toJson());
     expect(restored.fixedSingleAnswer, 'B');
@@ -80,6 +82,7 @@ void main() {
     expect(restored.slidePrompt, '参考附件的定义');
     expect(restored.appAutoStart, isTrue);
     expect(restored.aiRequestIntervalSeconds, 0);
+    expect(restored.aiMaxRetries, 0);
     expect(saved.toJson(), isNot(contains('fixedAnswer')));
   });
 

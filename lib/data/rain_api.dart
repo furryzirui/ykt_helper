@@ -7,9 +7,10 @@ import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
 import '../domain/models.dart';
 
-/// Ordinary Rain Classroom only. Account cookies never leave the official host.
+/// Each instance owns one deployment and its cookies for its entire lifetime.
 class RainApi {
-  static final Uri origin = Uri.parse('https://www.yuketang.cn');
+  final RainServer server;
+  Uri get origin => server.origin;
   final Dio dio;
   final CookieJar _cookies = CookieJar();
   final Future<void> Function(String cookies)? onCookiesChanged;
@@ -33,6 +34,7 @@ class RainApi {
 
   RainApi({
     Dio? dio,
+    this.server = RainServer.standard,
     this.onCookiesChanged,
     this.onRequestFailure,
     this.onRequestError,
@@ -214,9 +216,13 @@ class RainApi {
     if (!path.startsWith('/') || path.startsWith('//')) {
       throw const ApiFailure('接口路径无效');
     }
-    if (session != null && (userId == null || session.userId != userId)) {
+    if (session != null &&
+        (session.server != server ||
+            userId == null ||
+            session.userId != userId)) {
       throw const ApiFailure('课堂凭证与当前账号不符，请重新进入课堂', 401);
     }
+    final epoch = _epoch;
     try {
       final response = await dio.request<dynamic>(
         path,
@@ -229,6 +235,9 @@ class RainApi {
               : {'Authorization': 'Bearer ${session.bearer}'},
         ),
       );
+      if (epoch != _epoch) {
+        throw const ApiFailure('登录会话已切换，请重试', 401);
+      }
       final json = _json(response.data);
       _success(json);
       return response;
@@ -558,6 +567,7 @@ class RainApi {
       lessonId: lessonId,
       bearer: bearer,
       lessonToken: token,
+      server: server,
     );
   }
 
@@ -1095,7 +1105,10 @@ class RainApi {
   }
 
   Future<Json> uploadImage(ClassroomSession session, String filePath) async {
-    if (session.userId != userId) throw const ApiFailure('账号已切换');
+    if (session.server != server || session.userId != userId) {
+      throw const ApiFailure('账号或服务端已切换');
+    }
+    final epoch = _epoch;
     final token = await _data(
       '/pc/generate_qiniu_token',
       body: {'bucket_name': 'cms-attachment', 'expired_time': 3600},
@@ -1126,7 +1139,11 @@ class RainApi {
       if (data['success'] == false || str(data['key']).isEmpty) {
         throw const ApiFailure('图片上传失败');
       }
-      if (session.userId != userId) throw const ApiFailure('账号已切换，图片未用于答题');
+      if (epoch != _epoch ||
+          session.server != server ||
+          session.userId != userId) {
+        throw const ApiFailure('账号或服务端已切换，图片未用于答题');
+      }
       final url =
           'https://qn-scd1.yuketang.cn/${str(data['key']).split('/').map(Uri.encodeComponent).join('/')}';
       return {'pic': url, 'thumb': '$url?imageView2/2/w/568'};

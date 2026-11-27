@@ -1,6 +1,6 @@
 # 构建说明
 
-常规构建命令见根目录 README。当前版本 1.1.0+16，Android 包名 `com.furryzirui.ykt_helper`，最低 API 26，target/compile SDK 36。
+常规构建命令见根目录 README。当前版本 1.2.0+23，Android 包名 `com.furryzirui.ykt_helper`，最低 API 26，target/compile SDK 36。
 
 ## 发布签名
 
@@ -68,7 +68,7 @@ flutter build windows --release
 ./scripts/windows/package.ps1
 ```
 
-产物为 `dist/ykt_helper-1.1.0-windows-setup.exe`，包含 Flutter、原生插件、资源和 VC++ 运行库，每用户安装。脚本可用 `-InnoSetupCompiler` 指定现有 `ISCC.exe`。安装包未做 Authenticode 签名；登录安全验证需要 WebView2 Runtime。
+产物为 `dist/ykt_helper-1.2.0-windows-setup.exe`，包含 Flutter、原生插件、资源和 VC++ 运行库，每用户安装。脚本可用 `-InnoSetupCompiler` 指定现有 `ISCC.exe`。安装包未做 Authenticode 签名；登录安全验证需要 WebView2 Runtime。
 
 ## iOS 未签名 IPA
 
@@ -80,7 +80,7 @@ flutter build ios --release --no-codesign
 bash scripts/ios/package_unsigned.sh
 ```
 
-产物为 `dist/ykt_helper-1.1.0-ios-unsigned.ipa`。脚本验证真实设备 arm64、Bundle ID、版本、主应用未签名、无描述文件以及 ZIP 完整性。框架可能保留工具链签名，安装前需自行对完整应用签名；此流程不需要提供 Apple 账号或签名私钥。
+产物为 `dist/ykt_helper-1.2.0-ios-unsigned.ipa`。脚本验证真实设备 arm64、Bundle ID、版本、主应用未签名、无描述文件以及 ZIP 完整性。框架可能保留工具链签名，安装前需自行对完整应用签名；此流程不需要提供 Apple 账号或签名私钥。
 
 仓库的 Windows / iOS 工作流使用对应系统构建并保存产物，不自动发布 Release。
 

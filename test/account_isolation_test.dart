@@ -8,6 +8,7 @@ import 'package:ykt_helper/data/rain_api.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/services/ai_answer.dart';
+import 'package:ykt_helper/services/ai_request_scheduler.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 
 class DelayedStore implements KeyValueStore {
@@ -174,6 +175,7 @@ AppController makeController(
   api: api,
   store: store,
   ai: ai,
+  aiRequests: AiRequestScheduler(),
   background: NoBackground(),
   startTimers: false,
   connectSockets: false,

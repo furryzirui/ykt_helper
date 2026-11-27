@@ -671,7 +671,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
     autostart.permission = 'granted';
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
     autostart.prepareError = const ApiFailure('failed');
@@ -718,7 +722,11 @@ void main() {
     autostart.pending = first;
     await tester.tap(_setting('app-auto-start'));
     autostart.pending = second;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     first.complete('granted');
     await tester.pump();
@@ -869,7 +877,7 @@ void main() {
     await _close(tester, controller);
   });
 
-  testWidgets('延迟非法仍保存并提示原因，修正后清除提示', (tester) async {
+  testWidgets('数字配置非法仍保存并提示原因，修正后清除提示', (tester) async {
     final controller = _Controller(_Ai())
       ..settings = AppSettings(autoAnswer: true, autoSubmit: true);
     await _show(tester, controller);
@@ -881,6 +889,18 @@ void main() {
     await _type(tester, 'submitDelay', '45');
     await _settleSave(tester);
     expect(controller.settings.autoSubmitDelaySeconds, 45);
+    expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
+    await _type(tester, 'aiRequestInterval', '0');
+    await _settleSave(tester);
+    expect(controller.settings.aiRequestIntervalSeconds, 0);
+    expect(find.text('上次请求完成的等待时间，若请求出现429错误可适当调高'), findsOneWidget);
+    await _type(tester, 'aiMaxRetries', '11');
+    await _settleSave(tester);
+    expect(controller.settings.aiMaxRetries, 11);
+    expect(find.textContaining('AI 重试次数请输入'), findsOneWidget);
+    await _type(tester, 'aiMaxRetries', '0');
+    await _settleSave(tester);
+    expect(controller.settings.aiMaxRetries, 0);
     expect(find.byKey(const ValueKey('automation-save-error')), findsNothing);
     await _close(tester, controller);
   });

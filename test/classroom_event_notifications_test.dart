@@ -109,6 +109,7 @@ void main() {
             api: api,
             store: fixtures.MemoryStore(),
             ai: ai,
+            aiRequests: fixtures.automationScheduler(),
             background: _Runtime(),
             autostart: const fixtures.NoAutostart(),
             notifications: notifications,
@@ -303,8 +304,13 @@ void main() {
       notifications.pendingQuestion = Completer<bool>();
       final live = await enter();
       final pendingGeneration = notifications.shown.singleWhere(
-        (event) => event.body.contains('正在使用 AI 自动作答'),
+        (event) => event.problem == question.id,
       );
+      expect(
+        pendingGeneration.body,
+        anyOf(contains('AI 答案请求已加入队列'), contains('正在使用 AI 自动作答')),
+      );
+      expect(ai.requests['q'], hasLength(1));
       await controller.processEvent(live, {'op': 'lessonfinished'});
       await settle();
       notifications.pendingQuestion!.complete(true);

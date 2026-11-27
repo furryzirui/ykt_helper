@@ -111,7 +111,11 @@ class LiveClass {
 }
 
 class AppController extends ChangeNotifier with WidgetsBindingObserver {
-  late final RainApi api;
+  late RainApi api;
+  final RainApi Function(RainServer server)? apiFactory;
+  RainServer get server => api.server;
+  Future<void> _serverOperations = Future<void>.value();
+  Future<void>? _logoutFlight;
   final KeyValueStore store;
   final AiAnswerService ai;
   final AiRequestScheduler aiRequests;
@@ -194,6 +198,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   AppController({
     RainApi? api,
+    this.apiFactory,
     KeyValueStore? store,
     AiAnswerService? ai,
     AiRequestScheduler? aiRequests,
@@ -214,22 +219,68 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
        gallery = gallery ?? const GallerySaver(),
        logs = logs ?? AppLogs(),
        notifications = notifications ?? const ClassroomNotifications() {
-    this.api =
-        api ??
-        RainApi(
-          onCookiesChanged: (cookies) => _write('cookies', cookies),
-          onRequestError: (path, method, failure, elapsed) => this.logs.add(
-            AppLogEvent.api,
-            success: false,
-            error: failure,
-            elapsed: elapsed,
-            code: failure is ApiFailure ? failure.code : null,
-            context: {'phase': 'request', 'route': path, 'method': method},
-          ),
-        );
+    this.api = api ?? _createApi(RainServer.standard);
     WidgetsBinding.instance.addObserver(this);
     this.background.setStateListener(_runtimeStateChanged);
   }
+
+  String _cookiesKey(RainServer value) =>
+      value == RainServer.standard ? 'cookies' : 'cookies:${value.name}';
+  String _answersKey(RainServer value, String id) =>
+      value == RainServer.standard
+      ? 'answers:$id'
+      : 'answers:${value.name}:$id';
+
+  RainApi _createApi(RainServer value) =>
+      apiFactory?.call(value) ??
+      RainApi(
+        server: value,
+        onCookiesChanged: (cookies) => _write(_cookiesKey(value), cookies),
+        onRequestError: (path, method, failure, elapsed) => logs.add(
+          AppLogEvent.api,
+          success: false,
+          error: failure,
+          elapsed: elapsed,
+          code: failure is ApiFailure ? failure.code : null,
+          context: {
+            'phase': 'request',
+            'route': path,
+            'method': method,
+            'source': value.name,
+          },
+        ),
+      );
+
+  Future<void> selectServer(RainServer value) {
+    final operation = _serverOperations.catchError((Object _) {}).then((
+      _,
+    ) async {
+      if (_disposed) return;
+      if (account != null || _resumeLoginPending) {
+        throw const ApiFailure('请先退出当前账号，再切换雨课堂服务端');
+      }
+      if (busy) throw const ApiFailure('正在恢复登录，请稍后再选择服务端');
+      if (server == value) return;
+      _generation++;
+      final previousApi = api;
+      previousApi.cancelQr();
+      await previousApi.logout();
+      await _writes;
+      if (_disposed) return;
+      await _write('rainServer', value.name);
+      if (_disposed) return;
+      api = _createApi(value);
+      courses = [];
+      liveLessons = [];
+      classrooms.clear();
+      _persistedAnswers.clear();
+      error = null;
+      _notify();
+    });
+    _serverOperations = operation.catchError((Object _) {});
+    return operation;
+  }
+
   void _notify() {
     if (!_disposed) {
       _syncAssignmentNotifications();
@@ -427,7 +478,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   ) {
     final current = live.currentPresentation;
     final decks = [
-      if (current != null) current,
+      ?current,
       ...live.presentations.values.where((deck) => !identical(deck, current)),
     ];
     for (final deck in decks) {
@@ -559,6 +610,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _valid(LiveClass live) =>
       !_disposed &&
+      live.session.server == server &&
       account?.id == live.session.userId &&
       identical(classrooms[live.lesson.id], live);
   Future<void> _write(String key, String value) {
@@ -910,6 +962,17 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       logs.add(AppLogEvent.startup);
       await _removeLegacyDiagnostics();
       if (_disposed || generation != _generation) return;
+      final savedServer = await store.read('rainServer');
+      if (_disposed || generation != _generation) return;
+      final selected = RainServer.values
+          .where((value) => value.name == savedServer)
+          .firstOrNull;
+      if (selected != null && selected != server) {
+        // The initial API has not restored a session. Invalidate it without
+        // overwriting credentials saved for a different deployment.
+        api.cancelQr();
+        api = _createApi(selected);
+      }
       final rawSettings = await store.read('settings');
       if (_disposed || generation != _generation) return;
       if (rawSettings != null) {
@@ -934,7 +997,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       }
       await _restoreServiceSession();
       if (_disposed || generation != _generation) return;
-      final cookies = await store.read('cookies');
+      final cookies = await store.read(_cookiesKey(server));
       if (_disposed || generation != _generation) return;
       if (cookies != null && cookies != '[]') {
         await api.restoreCookies(cookies);
@@ -1035,6 +1098,10 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> loginCompleted() async {
+    await _serverOperations;
+    if (_disposed) return;
+    final loginApi = api;
+    final loginServer = server;
     final generation = ++_generation;
     _resumeLoginPending = false;
     for (final live in classrooms.values) {
@@ -1044,7 +1111,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       }
       live._questionTimingTimers.clear();
     }
-    final profile = await api.profile();
+    final profile = await loginApi.profile();
     if (generation != _generation || _disposed) return;
     account = profile;
     logs.add(AppLogEvent.login, success: true);
@@ -1052,7 +1119,9 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (generation != _generation || account?.id != profile.id || _disposed) {
       return;
     }
-    await _write('cookies', await api.exportCookies());
+    final cookies = await loginApi.exportCookies();
+    if (generation != _generation || _disposed) return;
+    await _write(_cookiesKey(loginServer), cookies);
     if (generation != _generation || account?.id != profile.id || _disposed) {
       return;
     }
@@ -1062,7 +1131,30 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     _notify();
   }
 
-  Future<void> logout() async {
+  Future<void> logout() {
+    final pending = _logoutFlight;
+    if (pending != null) return pending;
+    // Invalidate pending login/lesson responses immediately, then serialize
+    // storage cleanup with deployment changes so neither can erase the other.
+    _generation++;
+    final operation = _serverOperations
+        .catchError((Object _) {})
+        .then((_) => _performLogout());
+    _logoutFlight = operation;
+    _serverOperations = operation.catchError((Object _) {});
+    unawaited(
+      operation
+          .whenComplete(() {
+            if (identical(_logoutFlight, operation)) _logoutFlight = null;
+          })
+          .catchError((Object _) {}),
+    );
+    return operation;
+  }
+
+  Future<void> _performLogout() async {
+    final logoutApi = api;
+    final logoutServer = server;
     logs.add(AppLogEvent.logout);
     _generation++;
     _backgroundRevision++;
@@ -1108,10 +1200,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     courses = [];
     liveLessons = [];
     error = null;
-    await api.logout();
+    await logoutApi.logout();
     await _writes;
-    await store.delete('cookies');
-    if (previous != null) await store.delete('answers:${previous.id}');
+    await store.delete(_cookiesKey(logoutServer));
+    if (previous != null) {
+      await store.delete(_answersKey(logoutServer, previous.id));
+    }
     _serviceManuallyEnabled = false;
     backgroundWarning = null;
     _notify();
@@ -1603,21 +1697,23 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<LiveClass> enter(Lesson lesson, {bool automatic = false}) {
     final existing = classrooms[lesson.id];
-    if (existing != null &&
-        account?.id == existing.session.userId &&
-        !existing.ended) {
+    if (existing != null && _valid(existing) && !existing.ended) {
       return Future.value(existing);
     }
-    return _entering.putIfAbsent(
-      lesson.id,
-      () =>
-          _logged(
-            AppLogEvent.enter,
-            () => _enter(lesson, automatic: automatic),
-          ).whenComplete(() {
+    final pending = _entering[lesson.id];
+    if (pending != null) return pending;
+    late final Future<LiveClass> operation;
+    operation =
+        _logged(
+          AppLogEvent.enter,
+          () => _enter(lesson, automatic: automatic),
+        ).whenComplete(() {
+          if (identical(_entering[lesson.id], operation)) {
             _entering.remove(lesson.id);
-          }),
-    );
+          }
+        });
+    _entering[lesson.id] = operation;
+    return operation;
   }
 
   Future<LiveClass> _enter(Lesson lesson, {bool automatic = false}) async {
@@ -1630,7 +1726,9 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (generation != _generation || account?.id != session.userId) {
       throw const ApiFailure('账号已切换，已取消进入');
     }
-    if (session.lessonId != lesson.id) throw const ApiFailure('课堂凭证与目标课堂不一致');
+    if (session.lessonId != lesson.id || session.server != server) {
+      throw const ApiFailure('课堂凭证与目标课堂或服务端不一致');
+    }
     final live = LiveClass(lesson: lesson, session: session);
     live.answers.addAll(_persistedAnswers[lesson.id] ?? {});
     classrooms[lesson.id] = live;
@@ -3120,6 +3218,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
           interval: () => Duration(
             seconds: settings.aiRequestIntervalSeconds.clamp(0, 3600),
           ),
+          maxRetries: () => settings.aiMaxRetries.clamp(0, 10),
           request: () => ai.generate(
             settings: snapshot,
             question: question,
@@ -3347,7 +3446,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     final id = account?.id;
     final generation = _generation;
     if (id == null) return;
-    final raw = await store.read('answers:$id');
+    final raw = await store.read(_answersKey(server, id));
     if (generation != _generation || account?.id != id || _disposed) return;
     _persistedAnswers.clear();
     if (raw == null) return;
@@ -3370,7 +3469,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       _persistedAnswers.remove(_persistedAnswers.keys.first);
     }
     await _write(
-      'answers:${live.session.userId}',
+      _answersKey(live.session.server, live.session.userId),
       jsonEncode(
         _persistedAnswers.map(
           (key, value) => MapEntry(

@@ -7,6 +7,7 @@ import 'package:ykt_helper/data/live_connection.dart';
 import 'package:ykt_helper/data/secure_store.dart';
 import 'package:ykt_helper/domain/models.dart';
 import 'package:ykt_helper/services/ai_answer.dart';
+import 'package:ykt_helper/services/ai_request_scheduler.dart';
 import 'package:ykt_helper/services/app_autostart.dart';
 import 'package:ykt_helper/services/background_runtime.dart';
 
@@ -17,6 +18,12 @@ DateTime automationTestNow() {
     return DateTime.now();
   }
 }
+
+AiRequestScheduler automationScheduler() => AiRequestScheduler(
+  elapsed: () =>
+      Duration(milliseconds: automationTestNow().millisecondsSinceEpoch),
+  wait: (delay) => Future<void>.delayed(delay),
+);
 
 class MemoryStore implements KeyValueStore {
   final Map<String, String> values = {};
@@ -255,6 +262,7 @@ void main() {
       ],
     );
     controller = AppController(
+      aiRequests: automationScheduler(),
       api: api,
       store: MemoryStore(),
       background: NoBackground(),
@@ -271,6 +279,7 @@ void main() {
     // Create Future chains inside the widget test's fake async zone.
     disposeController();
     controller = AppController(
+      aiRequests: automationScheduler(),
       api: api,
       store: MemoryStore(),
       background: NoBackground(),
@@ -286,6 +295,7 @@ void main() {
     disposeController();
     controller =
         AppController(
+            aiRequests: automationScheduler(),
             api: api,
             ai: ai,
             store: MemoryStore(),
@@ -348,7 +358,9 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
@@ -378,7 +390,9 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
@@ -406,7 +420,9 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
@@ -429,7 +445,9 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
@@ -459,8 +477,7 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
-      ai.requests['q2']!.single.complete('B');
-      await tester.pump();
+      expect(ai.requests['q2'], isNull);
       await openBatch(tester, live);
       await tester.pump(const Duration(seconds: 8));
       expect(api.submissions, 0);
@@ -468,6 +485,8 @@ void main() {
         const ApiFailure('provider unavailable'),
       );
       await tester.pump(Duration.zero);
+      expect(ai.requests['q2'], hasLength(1));
+      ai.requests['q2']!.single.complete('B');
       await tester.pump(Duration.zero);
       expect(api.submittedIds, ['q2']);
       expect(live.autoStates['q'], contains('provider unavailable'));
@@ -475,12 +494,11 @@ void main() {
   );
 
   testWidgets(
-    'an expired head with pending AI immediately releases the next ready question',
+    'an expired head cancels pending AI and releases the next queued question',
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai, delay: 2);
-      ai.requests['q2']!.single.complete('B');
-      await tester.pump();
+      expect(ai.requests['q2'], isNull);
       final dt = controller.now().millisecondsSinceEpoch;
       await controller.processEvent(live, {
         'op': 'unlockproblem',
@@ -490,9 +508,14 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       expect(api.submissions, 0);
       await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(ai.requests['q2'], hasLength(1));
+      ai.requests['q2']!.single.complete('B');
       await tester.pump();
+      await tester.pump(Duration.zero);
       expect(api.submittedIds, ['q2']);
       expect(live.autoStates['q'], '作答已结束');
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
       await tester.pump();
       expect(api.submittedIds, ['q2']);
@@ -504,7 +527,9 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
@@ -531,7 +556,9 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
@@ -555,69 +582,71 @@ void main() {
     },
   );
 
-  testWidgets(
-    'loaded questions start AI independently before timing or answer sync',
-    (tester) async {
-      final ai = BatchAi();
-      useAiClock(tester, ai);
-      api.decks['p'] = const Presentation(
-        id: 'p',
-        title: '课件',
-        slides: [
-          Slide(id: 's1', index: 0, imageUrl: '', question: question),
-          Slide(
-            id: 's2',
-            index: 1,
-            imageUrl: '',
-            question: Question(
-              id: 'q2',
-              body: '另一道题',
-              type: 1,
-              options: {'A': '甲', 'B': '乙', 'C': '丙'},
-            ),
+  testWidgets('loaded questions queue AI before timing or answer sync', (
+    tester,
+  ) async {
+    final ai = BatchAi();
+    useAiClock(tester, ai);
+    api.decks['p'] = const Presentation(
+      id: 'p',
+      title: '课件',
+      slides: [
+        Slide(id: 's1', index: 0, imageUrl: '', question: question),
+        Slide(
+          id: 's2',
+          index: 1,
+          imageUrl: '',
+          question: Question(
+            id: 'q2',
+            body: '另一道题',
+            type: 1,
+            options: {'A': '甲', 'B': '乙', 'C': '丙'},
           ),
-        ],
-      );
-      api.pendingAnswers = Completer();
-      final live = await controller.enter(lesson);
-      await controller.processEvent(live, hello());
-      await tester.pump();
-      expect(ai.requests.keys, containsAll(['q', 'q2']));
-      expect(live.answersKnown, isFalse);
-      ai.requests['q']!.single.complete('A');
-      ai.requests['q2']!.single.complete('C');
-      await tester.pump();
-      expect(live.draftAnswers['q'], ['A']);
-      expect(live.draftAnswers['q2'], ['C']);
-      expect(controller.canEditAnswer(live, live.questions['q']!), isTrue);
-      expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
-      await expectLater(
-        controller.submitAnswer(live, live.questions['q']!, ['A']),
-        throwsA(isA<ApiFailure>()),
-      );
-      controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
-      await controller.processEvent(live, hello());
-      expect(ai.requests['q'], hasLength(1));
-      expect(ai.requests['q2'], hasLength(1));
-      api.pendingAnswers!.complete({});
-      api.pendingAnswers = null;
-      await controller.syncAnswers(live);
-      await controller.processEvent(
-        live,
-        unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
-      );
-      await tester.pump();
-      expect(live.draftAnswers['q'], ['B']);
-      await tester.pump(const Duration(seconds: 29));
-      expect(api.submissions, 0);
-      await tester.pump(const Duration(seconds: 1));
-      await tester.pump();
-      expect(api.submittedAnswers, [
-        ['B'],
-      ]);
-      expect(controller.answerStatus(live, live.questions['q']!), '答案已提交');
-    },
-  );
+        ),
+      ],
+    );
+    api.pendingAnswers = Completer();
+    final live = await controller.enter(lesson);
+    await controller.processEvent(live, hello());
+    await tester.pump();
+    expect(ai.requests.keys, ['q']);
+    expect(live.autoStates['q2'], 'AI 等待请求');
+    expect(live.answersKnown, isFalse);
+    await tester.pump();
+    ai.requests['q']!.single.complete('A');
+    await tester.pump(Duration.zero);
+    ai.requests['q2']!.single.complete('C');
+    await tester.pump();
+    expect(live.draftAnswers['q'], ['A']);
+    expect(live.draftAnswers['q2'], ['C']);
+    expect(controller.canEditAnswer(live, live.questions['q']!), isTrue);
+    expect(controller.canSubmitAnswer(live, live.questions['q']!), isFalse);
+    await expectLater(
+      controller.submitAnswer(live, live.questions['q']!, ['A']),
+      throwsA(isA<ApiFailure>()),
+    );
+    controller.updateAnswerDraft(live, live.questions['q']!, ['B']);
+    await controller.processEvent(live, hello());
+    expect(ai.requests['q'], hasLength(1));
+    expect(ai.requests['q2'], hasLength(1));
+    api.pendingAnswers!.complete({});
+    api.pendingAnswers = null;
+    await controller.syncAnswers(live);
+    await controller.processEvent(
+      live,
+      unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
+    );
+    await tester.pump();
+    expect(live.draftAnswers['q'], ['B']);
+    await tester.pump(const Duration(seconds: 29));
+    expect(api.submissions, 0);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.submittedAnswers, [
+      ['B'],
+    ]);
+    expect(controller.answerStatus(live, live.questions['q']!), '答案已提交');
+  });
 
   testWidgets('slow AI uses the remaining delay from answerability', (
     tester,
@@ -632,6 +661,7 @@ void main() {
       unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
     );
     await tester.pump(const Duration(seconds: 20));
+    await tester.pump();
     ai.requests['q']!.single.complete('A');
     await tester.pump();
     expect(live.autoStates['q'], '答案已填充，10 秒后自动提交');
@@ -754,6 +784,7 @@ void main() {
       useAiClock(tester, ai);
       final live = await controller.enter(lesson);
       await controller.processEvent(live, hello());
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
       await tester.pump();
       await controller.syncAnswers(live);
@@ -786,6 +817,7 @@ void main() {
       controller.settings.autoSubmitDelaySeconds = 5;
       final live = await controller.enter(lesson);
       await controller.processEvent(live, hello());
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
       await tester.pump();
       await controller.syncAnswers(live);
@@ -848,6 +880,7 @@ void main() {
       useAiClock(tester, ai);
       final live = await controller.enter(lesson);
       await controller.processEvent(live, hello());
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
       await tester.pump();
       await controller.syncAnswers(live);
@@ -875,6 +908,7 @@ void main() {
       controller.settings.autoSubmitDelaySeconds = 5;
       final live = await controller.enter(lesson);
       await controller.processEvent(live, hello());
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
       await tester.pump();
       await controller.syncAnswers(live);
@@ -904,6 +938,7 @@ void main() {
       controller.settings.autoSubmit = false;
       final live = await controller.enter(lesson);
       await controller.processEvent(live, hello());
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
       await tester.pump();
       await controller.syncAnswers(live);
@@ -932,6 +967,7 @@ void main() {
         live,
         unlock(dt: tester.binding.clock.now().millisecondsSinceEpoch),
       );
+      await tester.pump();
       api.decks['p'] = const Presentation(
         id: 'p',
         title: '更新',
@@ -950,6 +986,7 @@ void main() {
         ],
       );
       await controller.refreshClassroom(live);
+      await tester.pump(const Duration(milliseconds: 300));
       expect(ai.requests['q'], hasLength(3));
       ai.requests['q']![1].complete('A');
       ai.requests['q']![2].complete('C');
@@ -964,6 +1001,7 @@ void main() {
       var clock = DateTime.now();
       disposeController();
       controller = AppController(
+        aiRequests: automationScheduler(),
         api: api,
         store: MemoryStore(),
         background: NoBackground(),
@@ -1127,6 +1165,7 @@ void main() {
       );
       final live = await controller.enter(lesson);
       await controller.processEvent(live, hello());
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
       await tester.pump();
       await controller.processEvent(live, {
@@ -1156,15 +1195,17 @@ void main() {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai);
       expect(ai.requests['q'], hasLength(1));
-      expect(ai.requests['q2'], hasLength(1));
+      expect(ai.requests['q2'], isNull);
       final changed = AppSettings.fromJson(controller.settings.toJson())
         ..autoSubmitDelaySeconds = 45;
       await controller.saveSettings(changed);
       await controller.saveSettings(AppSettings.fromJson(changed.toJson()));
       await tester.pump();
       expect(ai.requests['q'], hasLength(1));
-      expect(ai.requests['q2'], hasLength(1));
+      expect(ai.requests['q2'], isNull);
+      await tester.pump();
       ai.requests['q']!.single.complete('B');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('C');
       await tester.pump();
       expect(live.draftAnswers['q'], ['B']);
@@ -1180,6 +1221,7 @@ void main() {
       ai.requests['q']!.single.completeError(
         const ApiFailure('temporary failure'),
       );
+      await tester.pump();
       ai.requests['q2']!.single.complete('C');
       await tester.pump();
       expect(live.draftAnswers.containsKey('q'), isFalse);
@@ -1202,13 +1244,15 @@ void main() {
       controller.settings.model = 'original';
       final live = await controller.enter(lesson);
       await controller.processEvent(live, hello());
+      await tester.pump();
       await controller.saveSettings(
         AppSettings.fromJson(controller.settings.toJson())..model = 'other',
       );
+      await tester.pump(const Duration(milliseconds: 300));
       await controller.saveSettings(
         AppSettings.fromJson(controller.settings.toJson())..model = 'original',
       );
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(ai.requests['q'], hasLength(3));
       ai.requests['q']![2].complete('C');
       await tester.pump();
@@ -1473,6 +1517,7 @@ void main() {
     disposeController();
     controller =
         AppController(
+            aiRequests: automationScheduler(),
             api: api,
             ai: ai,
             store: MemoryStore(),
@@ -1503,6 +1548,7 @@ void main() {
     disposeController();
     controller =
         AppController(
+            aiRequests: automationScheduler(),
             api: api,
             ai: ai,
             store: MemoryStore(),
@@ -1612,6 +1658,7 @@ void main() {
     () async {
       disposeController();
       controller = AppController(
+        aiRequests: automationScheduler(),
         api: api,
         store: MemoryStore(),
         background: NoBackground(),
@@ -1962,7 +2009,9 @@ void main() {
     (tester) async {
       final ai = BatchAi();
       final live = await prepareBatch(tester, ai, delay: 5);
+      await tester.pump();
       ai.requests['q']!.single.complete('A');
+      await tester.pump(Duration.zero);
       ai.requests['q2']!.single.complete('B');
       await tester.pump();
       await openBatch(tester, live);
@@ -2151,6 +2200,7 @@ void main() {
     final ai = DeferredAi();
     controller =
         AppController(
+            aiRequests: automationScheduler(),
             api: api,
             ai: ai,
             store: MemoryStore(),
@@ -2188,6 +2238,7 @@ void main() {
     final ai = DeferredAi();
     controller =
         AppController(
+            aiRequests: automationScheduler(),
             api: api,
             ai: ai,
             store: MemoryStore(),
@@ -2226,6 +2277,7 @@ void main() {
       final ai = DeferredAi();
       controller =
           AppController(
+              aiRequests: automationScheduler(),
               api: api,
               ai: ai,
               store: MemoryStore(),
@@ -2351,6 +2403,7 @@ void main() {
       disposeController();
       final ai = DeferredAi();
       controller = AppController(
+        aiRequests: automationScheduler(),
         api: api,
         store: MemoryStore(),
         background: NoBackground(),
