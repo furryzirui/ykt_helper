@@ -149,6 +149,7 @@ class _AutomationPageState extends State<AutomationPage>
       'prompt': source.customPrompt,
       'slidePrompt': source.slidePrompt,
       'submitDelay': '${source.autoSubmitDelaySeconds}',
+      'aiRequestInterval': '${source.aiRequestIntervalSeconds}',
     };
     for (final entry in _fields.entries) {
       entry.value.text = values[entry.key] ?? '';
@@ -160,7 +161,8 @@ class _AutomationPageState extends State<AutomationPage>
   static AppSettings _copy(AppSettings value) =>
       AppSettings.fromJson(value.toJson())
         ..customPrompt = value.customPrompt
-        ..autoSubmitDelaySeconds = value.autoSubmitDelaySeconds;
+        ..autoSubmitDelaySeconds = value.autoSubmitDelaySeconds
+        ..aiRequestIntervalSeconds = value.aiRequestIntervalSeconds;
 
   static bool _sameSettings(AppSettings first, AppSettings second) =>
       jsonEncode(first.toJson()) == jsonEncode(second.toJson());
@@ -186,6 +188,10 @@ class _AutomationPageState extends State<AutomationPage>
   }
 
   String? _validationError(AppSettings value) {
+    if (value.aiRequestIntervalSeconds < 0 ||
+        value.aiRequestIntervalSeconds > 3600) {
+      return 'AI 请求间隔请输入 0–3600 秒';
+    }
     // Inactive answer settings must not block sign-in or startup preferences.
     if (!value.autoAnswer) return null;
     if (value.autoSubmit &&
@@ -1291,6 +1297,39 @@ class _AutomationPageState extends State<AutomationPage>
                             ),
                         ],
                       ],
+                      const Divider(height: 1),
+                      Padding(
+                        key: const ValueKey('input-aiRequestInterval'),
+                        padding: const EdgeInsets.only(top: 16, bottom: 8),
+                        child: TextField(
+                          key: const ValueKey('field-aiRequestInterval'),
+                          enabled: !_disabled,
+                          controller: _field(
+                            'aiRequestInterval',
+                            '${settings.aiRequestIntervalSeconds}',
+                          ),
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: 'AI 请求间隔',
+                            suffixText: '秒',
+                            helperText: '上次请求完成后的等待时间，0–3600 秒；0 表示仅串行',
+                            helperMaxLines: 3,
+                            prefixIcon: Icon(Icons.hourglass_bottom_rounded),
+                          ),
+                          onChanged: (value) => _edit(
+                            () => settings.aiRequestIntervalSeconds =
+                                int.tryParse(value) ?? -1,
+                            text: true,
+                          ),
+                          onEditingComplete: () {
+                            FocusScope.of(context).unfocus();
+                            unawaited(_flushSaves());
+                          },
+                        ),
+                      ),
                     ],
                   ),
                 ),

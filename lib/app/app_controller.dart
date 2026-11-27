@@ -10,6 +10,7 @@ import '../data/rain_api.dart';
 import '../data/secure_store.dart';
 import '../domain/models.dart';
 import '../services/ai_answer.dart';
+import '../services/ai_request_scheduler.dart';
 import '../services/app_logs.dart';
 import '../services/app_autostart.dart';
 import '../services/background_runtime.dart';
@@ -113,6 +114,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   late final RainApi api;
   final KeyValueStore store;
   final AiAnswerService ai;
+  final AiRequestScheduler aiRequests;
   final BackgroundRuntime background;
   final AppAutostart autostart;
   final GallerySaver gallery;
@@ -194,6 +196,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     RainApi? api,
     KeyValueStore? store,
     AiAnswerService? ai,
+    AiRequestScheduler? aiRequests,
     BackgroundRuntime? background,
     AppAutostart? autostart,
     GallerySaver? gallery,
@@ -205,6 +208,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }) : now = now ?? DateTime.now,
        store = store ?? SecureStore(),
        ai = ai ?? AiAnswerService(),
+       aiRequests = aiRequests ?? AiRequestScheduler.shared,
        background = background ?? BackgroundRuntime(),
        autostart = autostart ?? const AppAutostart(),
        gallery = gallery ?? const GallerySaver(),
@@ -2277,7 +2281,8 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     if (live.submitting.contains(question.id)) return '正在提交答案';
     if (current.dt <= 0 || _questionTime(current) < current.dt) {
       if (live.draftAnswers.containsKey(question.id)) return '答案已填充，等待开始作答';
-      return live.autoStates[question.id] == 'AI 正在作答' ? 'AI 正在作答' : '尚未开始作答';
+      final state = live.autoStates[question.id];
+      return state != null && state.startsWith('AI ') ? state : '尚未开始作答';
     }
     if (!live.activeProblemIds.contains(question.id)) return '正在确认作答时间';
     final automaticSeconds = automaticSubmissionRemainingSeconds(live, current);
@@ -3054,12 +3059,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       'source': settings.answerMode.name,
     };
     live.autoStates[id] = settings.answerMode == AnswerMode.ai
-        ? 'AI 正在作答'
+        ? 'AI 等待请求'
         : '正在自动作答';
     _reportClassroomEvent(
       live,
       'generating',
-      settings.answerMode == AnswerMode.ai ? '正在使用 AI 自动作答' : '正在使用固定答案作答',
+      settings.answerMode == AnswerMode.ai ? 'AI 答案请求已加入队列' : '正在使用固定答案作答',
       question: question,
       token: '$version:$generation',
     );
@@ -3091,15 +3096,74 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
               (slide) => slide.question?.id == id,
             ) ??
             -1;
-        result = await ai.generate(
-          settings: snapshot,
-          question: question,
-          slides: AiAnswerService.selectedSlides(
-            presentation,
-            page,
-            snapshot.slideScope,
+        String? previousQueuePhase;
+        result = await aiRequests.generate(
+          isCurrent: () =>
+              current() &&
+              !live._editedDrafts.contains(id) &&
+              !live.answers.containsKey(id) &&
+              !_questionEnded(live, live.questions[id] ?? question),
+          interval: () => Duration(
+            seconds: settings.aiRequestIntervalSeconds.clamp(0, 3600),
           ),
-          loadImage: loadImage,
+          request: () => ai.generate(
+            settings: snapshot,
+            question: question,
+            slides: AiAnswerService.selectedSlides(
+              presentation,
+              page,
+              snapshot.slideScope,
+            ),
+            loadImage: loadImage,
+          ),
+          onProgress: (progress) {
+            final seconds = (progress.remaining.inMilliseconds / 1000).ceil();
+            live.autoStates[id] = switch (progress.phase) {
+              AiRequestPhase.queued => 'AI 等待请求',
+              AiRequestPhase.waiting => 'AI 等待请求，$seconds 秒后发送',
+              AiRequestPhase.request => 'AI 正在作答',
+              AiRequestPhase.retry => 'AI 限流，$seconds 秒后重试',
+              AiRequestPhase.retryExhausted => 'AI 限流重试已用尽',
+            };
+            if (progress.phase == AiRequestPhase.request) {
+              _reportClassroomEvent(
+                live,
+                'generating',
+                '正在使用 AI 自动作答',
+                question: question,
+                token: '$version:$generation:${progress.retry}',
+              );
+            }
+            final phase = switch (progress.phase) {
+              AiRequestPhase.queued || AiRequestPhase.waiting => 'queued',
+              AiRequestPhase.request => 'request',
+              AiRequestPhase.retry => 'retry',
+              AiRequestPhase.retryExhausted => 'retryExhausted',
+            };
+            final phaseKey = '$phase:${progress.retry}';
+            if (phaseKey != previousQueuePhase) {
+              previousQueuePhase = phaseKey;
+              logs.add(
+                AppLogEvent.automatic,
+                success: phase == 'retryExhausted' ? false : null,
+                detail: phase == 'retry'
+                    ? '模型限流，等待后重试生成'
+                    : phase == 'retryExhausted'
+                    ? '模型限流重试已用尽'
+                    : phase == 'request'
+                    ? '发送模型生成请求'
+                    : '加入全局模型请求队列',
+                context: {
+                  ...context,
+                  'phase': phase,
+                  'retry': progress.retry,
+                  'delaySeconds': seconds,
+                },
+                elapsed: elapsed.elapsed,
+              );
+            }
+            _notify();
+          },
         );
         logs.add(
           AppLogEvent.automatic,
@@ -3190,6 +3254,25 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         elapsed: elapsed.elapsed,
       );
       _maybeSubmitPreparedDraft(live, latest);
+    } on AiGenerationCanceled {
+      final latest = live.questions[id];
+      if (current() && latest != null) {
+        if (live.answers.containsKey(id) || _questionEnded(live, latest)) {
+          live.autoStates[id] = answerStatus(live, latest);
+        } else if (live._editedDrafts.contains(id)) {
+          _maybeSubmitPreparedDraft(live, latest);
+        }
+      }
+      logs.add(
+        AppLogEvent.automatic,
+        detail: '生成队列任务已失效，未发送或已取消',
+        context: {
+          ...context,
+          'phase': 'generationDiscard',
+          'reason': invalidReason() ?? 'questionNoLongerNeedsGeneration',
+        },
+        elapsed: elapsed.elapsed,
+      );
     } catch (failure) {
       logs.add(
         AppLogEvent.automatic,

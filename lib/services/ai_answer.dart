@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:html/parser.dart' as html;
 import '../domain/models.dart';
+import 'ai_request_scheduler.dart';
 
 class AiAnswerService {
   final Dio _client;
@@ -99,6 +100,14 @@ class AiAnswerService {
 
   static ApiFailure _requestFailure(String message, DioException error) {
     final code = error.response?.statusCode;
+    if (code == 429) {
+      return AiRateLimitFailure(
+        '$message：请求过于频繁或额度不足（HTTP 429）',
+        retryAfter: AiRateLimitFailure.parseRetryAfter(
+          error.response?.headers.value('retry-after'),
+        ),
+      );
+    }
     final reason = code != null
         ? switch (code) {
             401 => '认证失败，请检查 API key',
@@ -148,6 +157,9 @@ class AiAnswerService {
       var totalBytes = 0;
       final attached = <String>{};
       Future<void> attach(String url) async {
+        if (AiRequestScheduler.currentCancellationToken?.isCancelled == true) {
+          throw const AiGenerationCanceled();
+        }
         if (!attached.add(url)) return;
         final Uint8List bytes;
         if (url.startsWith('data:')) {
@@ -185,16 +197,22 @@ class AiAnswerService {
         }
         await attach(slide.imageUrl);
       }
-      final response = await _client.postUri(
-        endpoint(settings.baseUrl, 'chat/completions'),
-        data: {
-          'model': model,
-          'messages': [
-            {'role': 'user', 'content': content},
-          ],
-          'stream': false,
-        },
-        options: Options(headers: headers, followRedirects: false),
+      if (AiRequestScheduler.currentCancellationToken?.isCancelled == true) {
+        throw const AiGenerationCanceled();
+      }
+      final response = await AiRequestScheduler.trackTransport(
+        _client.postUri(
+          endpoint(settings.baseUrl, 'chat/completions'),
+          data: {
+            'model': model,
+            'messages': [
+              {'role': 'user', 'content': content},
+            ],
+            'stream': false,
+          },
+          options: Options(headers: headers, followRedirects: false),
+          cancelToken: AiRequestScheduler.currentCancellationToken,
+        ),
       );
       final choices = array(object(response.data)['choices']);
       if (choices.isEmpty) throw const ApiFailure('AI 没有返回答案');

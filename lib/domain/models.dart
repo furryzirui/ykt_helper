@@ -300,6 +300,7 @@ class AppSettings {
       autoAnswer,
       autoSubmit;
   int autoSubmitDelaySeconds;
+  int aiRequestIntervalSeconds;
   int serviceTimeoutMinutes;
   BackgroundServiceMode backgroundMode;
   String? iosBackgroundConsentMode;
@@ -318,6 +319,7 @@ class AppSettings {
     this.autoAnswer = false,
     this.autoSubmit = false,
     this.autoSubmitDelaySeconds = 30,
+    this.aiRequestIntervalSeconds = 3,
     this.serviceTimeoutMinutes = 0,
     this.backgroundMode = BackgroundServiceMode.silentAudio,
     this.iosBackgroundConsentMode,
@@ -411,6 +413,7 @@ class AppSettings {
     autoAnswer: truth(json['autoAnswer']),
     autoSubmit: truth(json['autoSubmit']),
     autoSubmitDelaySeconds: integer(json['autoSubmitDelaySeconds'], 30),
+    aiRequestIntervalSeconds: integer(json['aiRequestIntervalSeconds'], 3),
     serviceTimeoutMinutes:
         serviceTimeoutOptions.contains(json['serviceTimeoutMinutes'])
         ? integer(json['serviceTimeoutMinutes'])
@@ -465,6 +468,7 @@ class AppSettings {
     'autoAnswer': autoAnswer,
     'autoSubmit': autoSubmit,
     'autoSubmitDelaySeconds': autoSubmitDelaySeconds,
+    'aiRequestIntervalSeconds': aiRequestIntervalSeconds,
     'serviceTimeoutMinutes': serviceTimeoutMinutes,
     'backgroundMode': backgroundMode.name,
     'iosBackgroundConsentMode': iosBackgroundConsentMode,
