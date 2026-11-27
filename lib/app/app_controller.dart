@@ -244,9 +244,18 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       for (final live in classrooms.values) {
         if (!_valid(live) || live.ended) continue;
         for (final question in live.questions.values) {
-          if (!canSubmitAnswer(live, question)) continue;
           final key =
               '${live.session.userId}:${live.lesson.id}:assignment:${question.id}';
+          if (!canSubmitAnswer(live, question)) {
+            // Keep the published reminder while POST is pending. Only its
+            // confirmed result may replace it with a submitted notification.
+            if (live.submitting.contains(question.id) &&
+                !live.answers.containsKey(question.id) &&
+                _activeAssignmentNotices.contains(key)) {
+              wanted.add(key);
+            }
+            continue;
+          }
           wanted.add(key);
           final state = live.autoStates[question.id] ?? '';
           final String body, token;
@@ -292,7 +301,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
             question: question,
             token: token,
             namespace: 'assignment',
-            current: () => _valid(live) && canSubmitAnswer(live, question),
+            current: () =>
+                _valid(live) &&
+                !live.ended &&
+                !live.answers.containsKey(question.id) &&
+                (canSubmitAnswer(live, question) ||
+                    live.submitting.contains(question.id)),
           );
         }
       }
