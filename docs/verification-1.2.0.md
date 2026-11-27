@@ -18,3 +18,18 @@
 未操作真实设备或登录真实课堂。
 
 最终全部 587 项 Flutter 测试通过；静态分析无问题，81 个 Dart 文件格式检查通过。源码公开检查未发现凭证、签名私钥或本机配置泄漏。
+
+## 正式构建
+
+正式构建源码：`bc05a216a109713f246beb610fa999493fc94a01`。Android 本地正式签名双包构建成功；[Windows / iOS CI](https://github.com/furryzirui/ykt_helper/actions/runs/45975178293) 成功，Windows 自启动授权检查通过。
+
+- Android：核对 1.2.0+23、包名、单 arm64 与三架构通用包、原发布证书、v2 签名与 ZIP CRC。
+- Windows：核对 1.2.0、PE/Inno 格式、x64 构建、运行依赖和 CI 28 项 authenticated 清单打包证据；未独立解包或运行安装器。
+- iOS：核对 1.2.0+23、arm64、主程序未签名、ZIP CRC、Ed25519 清单签名及全部 50 项文件摘要。
+
+| 安装包 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| ykt_helper-1.2.0-android-arm64-v8a.apk | 28880680 | `f1cbcb05323144f1c5693d92575e51ff59e90d895fa1e450f4425eccc9a92613` |
+| ykt_helper-1.2.0-android-universal.apk | 79151830 | `c2704f3f70e065b0889747806959396030f2862b4e0fcc60623992d43dd9511d` |
+| ykt_helper-1.2.0-windows-setup.exe | 12478056 | `dbc8cad996035e8b1a14e883275de5088c36757304c2fd0daa0b76b485e40369` |
+| ykt_helper-1.2.0-ios-unsigned.ipa | 9423179 | `2d7b332e697c44d74d1b333350474134f6de17118c11ab42f183dbe97d4be692` |
