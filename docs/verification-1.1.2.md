@@ -26,4 +26,17 @@ Android 构建成功，源码提交为 `674cf88822c4cb899130a9105fd9a59784700a85
 
 所有课堂共用 AI 请求串行队列，请求间隔位于自动化设置最下方，默认 3 秒，允许 0 秒（仍串行）。HTTP 429 优先遵守 Retry-After，缺失时等待 5、10、20 秒，最多重试 3 次；失败继续后题，取消、题目终止或已答后不发送过期请求，不重试雨课堂答案提交。
 
-按用户要求，本轮不另行测试或设备验收，仅做代码审查、格式化、构建与安装包核对；现有通知测试的预期已随通知语义维护但未执行。Windows/iOS 手动构建关闭测试步骤，提交标记跳过自动 CI。安装包核对结果完成后补充。
+按用户要求，本轮不另行测试或设备验收，仅做代码审查、格式化、构建与安装包核对；现有通知测试的预期已随通知语义维护但未执行。Windows/iOS 手动构建关闭测试步骤，提交标记跳过自动 CI。
+
+正式构建源码：`d1cbc4f87d4c4661e04f1232e7247cfa132dc28f`。Android 本地两包成功；[Windows / iOS CI](https://github.com/furryzirui/ykt_helper/actions/runs/45966869922) 成功，Windows 测试步骤确认为跳过。
+
+- Android：核对 1.1.2+22、包名、arm64 与三架构通用包、原发布证书、v2 签名与 ZIP CRC；已核对包内新 AI 间隔、题目页码和 build 文本。
+- Windows：核对版本、PE/Inno 格式、x64 构建、运行依赖和 CI 28 项 authenticated 清单打包证据；未独立解包或运行安装器。
+- iOS：核对 1.1.2+22、arm64、主程序未签名、ZIP CRC、Ed25519 清单签名及全部 50 项文件摘要。
+
+| 正式安装包 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| ykt_helper-1.1.2-android-arm64-v8a.apk | 28880676 | `b91fa2580a537d411b25663bc805f70552ef08fbc4ff8a186b18198d53c8b988` |
+| ykt_helper-1.1.2-android-universal.apk | 79037138 | `c16fa1a6a37ad8ef853f3877ba22aebb5c84fc1b79104ae9eb65bd24f5e49722` |
+| ykt_helper-1.1.2-windows-setup.exe | 12468800 | `a34b1065a01cdd8d06b16f1aec4c8d3dadf5531b9df0d9a22abb07fb6d8c3f9b` |
+| ykt_helper-1.1.2-ios-unsigned.ipa | 9404226 | `7872aaf05fc3eea9b5a6963a98fcfc1db6e270c8785d8250038dfb8e0fdae4f1` |
