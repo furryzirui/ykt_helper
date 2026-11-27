@@ -89,8 +89,7 @@ bool FlutterWindow::OnCreate() {
           const auto title = ReminderText(StringArgument(call.arguments(), "title"));
           const auto body = ReminderText(StringArgument(call.arguments(), "body"));
           const bool valid = !key.empty() && !title.empty() &&
-              !StringArgument(call.arguments(), "lessonId").empty() &&
-              !StringArgument(call.arguments(), "problemId").empty();
+              !StringArgument(call.arguments(), "lessonId").empty();
           result->Success(flutter::EncodableValue(valid && ShowClassroomReminder(key, title, body)));
         } else if (call.method_name() == "cancel") {
           if (key == classroom_reminder_key_) CancelClassroomReminder();

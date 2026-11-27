@@ -704,9 +704,25 @@ void main() {
       await controller.submitAnswer(live, live.questions['next-q']!, ['B']);
       expect(api.answerPresentationIds, ['next']);
       expect(api.submissions, 1);
+      expect(
+        controller.logs.entries
+            .firstWhere(
+              (entry) => entry.context['phase'] == 'syncedLiveResults',
+            )
+            .context['source'],
+        'afterSubmission',
+      );
       await controller.refreshClassroom(live);
       expect(api.presentationReads, ['p', 'next', 'next']);
       expect(api.answerPresentationIds, ['next', 'p']);
+      expect(
+        controller.logs.entries
+            .firstWhere(
+              (entry) => entry.context['phase'] == 'syncedLiveResults',
+            )
+            .context['source'],
+        'manualRefresh',
+      );
     },
   );
 
@@ -1896,6 +1912,89 @@ void main() {
     await tester.pump();
     return live;
   }
+
+  testWidgets(
+    'automatic countdown is read from a stable deadline every second without new requests',
+    (tester) async {
+      final live = await prepareDelayed(tester);
+      final question = live.questions['q']!;
+      final due = controller.automaticSubmissionDeadline(live, question);
+      final reads = api.answerReads;
+      final presentations = api.presentationReads.length;
+      expect(due, isNotNull);
+      expect(controller.answerStatus(live, question), '答案已填充，30 秒后自动提交');
+      for (final seconds in [29, 28, 27]) {
+        await tester.pump(const Duration(seconds: 1));
+        expect(
+          controller.automaticSubmissionRemainingSeconds(live, question),
+          seconds,
+        );
+        expect(
+          controller.answerStatus(live, question),
+          '答案已填充，$seconds 秒后自动提交',
+        );
+        expect(controller.automaticSubmissionDeadline(live, question), due);
+        expect(api.answerReads, reads);
+        expect(api.presentationReads.length, presentations);
+        expect(api.submissions, 0);
+      }
+      controller.updateAnswerDraft(live, question, ['B']);
+      expect(controller.automaticSubmissionDeadline(live, question), due);
+      expect(
+        controller.automaticSubmissionRemainingSeconds(live, question),
+        27,
+      );
+      await tester.pump(const Duration(seconds: 27));
+      await tester.pump();
+      expect(api.submittedAnswers, [
+        ['B'],
+      ]);
+      expect(
+        controller.automaticSubmissionRemainingSeconds(live, question),
+        isNull,
+      );
+      expect(controller.answerStatus(live, question), '答案已提交');
+    },
+  );
+
+  testWidgets(
+    'queue countdown starts after the previous successful submission and remains stable',
+    (tester) async {
+      final ai = BatchAi();
+      final live = await prepareBatch(tester, ai, delay: 5);
+      ai.requests['q']!.single.complete('A');
+      ai.requests['q2']!.single.complete('B');
+      await tester.pump();
+      await openBatch(tester, live);
+      expect(
+        controller.automaticSubmissionRemainingSeconds(
+          live,
+          live.questions['q2']!,
+        ),
+        isNull,
+      );
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(api.submittedIds, ['q']);
+      final due = controller.automaticSubmissionDeadline(
+        live,
+        live.questions['q2']!,
+      );
+      expect(due, controller.now().add(const Duration(seconds: 5)));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        controller.answerStatus(live, live.questions['q2']!),
+        '答案已填充，4 秒后自动提交',
+      );
+      expect(
+        controller.automaticSubmissionDeadline(live, live.questions['q2']!),
+        due,
+      );
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+      expect(api.submittedIds, ['q', 'q2']);
+    },
+  );
 
   testWidgets('custom delay waits fully and does not block another classroom', (
     tester,

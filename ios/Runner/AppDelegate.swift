@@ -113,7 +113,7 @@ import UserNotifications
             let title = arguments["title"] as? String, !title.isEmpty,
             let body = arguments["body"] as? String,
             let lessonId = arguments["lessonId"] as? String, !lessonId.isEmpty,
-            let problemId = arguments["problemId"] as? String, !problemId.isEmpty,
+            let problemId = arguments["problemId"] as? String,
             UIApplication.shared.applicationState == .background else {
         result(false)
         return

@@ -279,6 +279,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('确认自动签到'), findsOneWidget);
     expect(find.textContaining('并非手机实测位置'), findsOneWidget);
+    expect(find.textContaining('只会自动进入已加入的课堂，新课需要扫码加入'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, '取消'));
     await tester.pumpAndSettle();
     expect(controller.saves, 0);

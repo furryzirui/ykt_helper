@@ -32,7 +32,7 @@ internal class ClassroomNotifications(
                         val lessonId = call.argument<String>("lessonId")
                         val problemId = call.argument<String>("problemId")
                         if (key.isNullOrEmpty() || title.isNullOrEmpty() || body == null ||
-                            lessonId.isNullOrEmpty() || problemId.isNullOrEmpty() || visible() ||
+                            lessonId.isNullOrEmpty() || visible() ||
                             !RuntimePermissions.classroomNotificationsAllowed(context)) {
                             result.success(false)
                         } else {

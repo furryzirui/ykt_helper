@@ -853,15 +853,20 @@ class _QuestionCardState extends State<QuestionCard> {
     super.dispose();
   }
 
-  int? get _remaining => widget.question.limit > 0 && widget.question.dt > 0
-      ? ((widget.question.dt +
-                    widget.question.limit * 1000 -
-                    widget.controller.now().millisecondsSinceEpoch -
-                    widget.question.serverOffsetMillis) /
-                1000)
-            .ceil()
-            .clamp(0, 86400)
-      : null;
+  int? get _remaining {
+    final question =
+        widget.classroom.questions[widget.question.id] ?? widget.question;
+    return question.limit > 0 && question.dt > 0
+        ? ((question.dt +
+                      question.limit * 1000 -
+                      widget.controller.now().millisecondsSinceEpoch -
+                      question.serverOffsetMillis) /
+                  1000)
+              .ceil()
+              .clamp(0, 86400)
+        : null;
+  }
+
   Future<void> _upload() async {
     // Store current edits before opening the image picker.
     _draftEdited();

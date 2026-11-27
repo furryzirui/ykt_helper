@@ -23,6 +23,7 @@ class _AutomaticSubmission {
   final String settingsSnapshot;
   final Question question;
   final dynamic answer;
+  DateTime? deadline;
   _AutomaticSubmission({
     required this.generation,
     required this.settingsSnapshot,
@@ -118,6 +119,10 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   final AppLogs logs;
   final ClassroomNotifications notifications;
   final Set<String> _attentionAttempts = {}, _activeAttention = {};
+  final Map<String, String> _eventNoticeStates = {};
+  final Map<String, Object> _eventNoticeTickets = {};
+  final Map<String, Future<void>> _eventNoticeFlights = {};
+  final Set<String> _activeEventNotices = {};
   final bool startTimers, connectSockets;
   final DateTime Function() now;
   final Dio _media = Dio(
@@ -252,6 +257,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
               ? 'submit'
               : null;
           if (kind == null) continue;
+          final eventKey =
+              '${live.session.userId}:${live.lesson.id}:event:${question.id}';
+          if (_activeEventNotices.remove(eventKey)) {
+            unawaited(notifications.cancel(eventKey));
+          }
           final key =
               '${live.session.userId}:${live.lesson.id}:${question.id}:${question.dt}:$kind';
           wanted.add(key);
@@ -312,6 +322,110 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  void _reportClassroomEvent(
+    LiveClass live,
+    String kind,
+    String body, {
+    Question? question,
+    String token = '',
+  }) {
+    if (!_valid(live)) return;
+    _reportLessonEvent(
+      live.lesson,
+      live.session.userId,
+      kind,
+      body,
+      question: question,
+      token: token,
+      current: () => _valid(live),
+    );
+  }
+
+  void _reportLessonEvent(
+    Lesson lesson,
+    String userId,
+    String kind,
+    String body, {
+    Question? question,
+    String token = '',
+    required bool Function() current,
+  }) {
+    if (_foreground || _disposed || !current()) return;
+    final key = '$userId:${lesson.id}:event:${question?.id ?? 'classroom'}';
+    final state = '$kind:${question?.dt ?? 0}:$token';
+    if (_eventNoticeStates[key] == state) return;
+    final ticket = Object();
+    _eventNoticeTickets[key] = ticket;
+    _eventNoticeStates[key] = state;
+    _activeEventNotices.add(key);
+    final generation = _generation;
+    final operation = (_eventNoticeFlights[key] ?? Future<void>.value())
+        .catchError((Object _) {})
+        .then((_) async {
+          if (_foreground ||
+              !current() ||
+              generation != _generation ||
+              !identical(_eventNoticeTickets[key], ticket)) {
+            return;
+          }
+          try {
+            final delivered = await notifications.show(
+              key: key,
+              title: lesson.title,
+              body: body,
+              lessonId: lesson.id,
+              problemId: question?.id ?? '',
+            );
+            if (!delivered &&
+                generation == _generation &&
+                current() &&
+                identical(_eventNoticeTickets[key], ticket)) {
+              _eventNoticeStates.remove(key);
+              _activeEventNotices.remove(key);
+            }
+            if (_foreground ||
+                !current() ||
+                generation != _generation ||
+                !identical(_eventNoticeTickets[key], ticket) ||
+                !_activeEventNotices.contains(key)) {
+              await notifications.cancel(key);
+            }
+          } catch (_) {
+            if (generation == _generation &&
+                current() &&
+                identical(_eventNoticeTickets[key], ticket)) {
+              _eventNoticeStates.remove(key);
+              _activeEventNotices.remove(key);
+            }
+          }
+        });
+    _eventNoticeFlights[key] = operation;
+  }
+
+  void _dismissEventNotifications() {
+    for (final key in _activeEventNotices) {
+      unawaited(notifications.cancel(key));
+    }
+    _activeEventNotices.clear();
+  }
+
+  void _dismissClassroomProgress(LiveClass live, {String? problemId}) {
+    final prefix = '${live.session.userId}:${live.lesson.id}:event:';
+    final keys = _activeEventNotices
+        .where(
+          (key) =>
+              key.startsWith(prefix) &&
+              key != '${prefix}classroom' &&
+              (problemId == null || key == '$prefix$problemId'),
+        )
+        .toList();
+    for (final key in keys) {
+      _activeEventNotices.remove(key);
+      _eventNoticeTickets.remove(key);
+      unawaited(notifications.cancel(key));
+    }
+  }
+
   bool _valid(LiveClass live) =>
       !_disposed &&
       account?.id == live.session.userId &&
@@ -337,6 +451,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   void setForeground(bool foreground) {
     if (_disposed || _foreground == foreground) return;
     _foreground = foreground;
+    if (foreground) _dismissEventNotifications();
     if (foreground && _windows) _windowsExitPending = false;
     final revision = ++_lifecycleRevision;
     if (_deadlineExpired) unawaited(_expireService());
@@ -823,6 +938,9 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     final previous = account;
     account = null;
     _attentionAttempts.clear();
+    _eventNoticeStates.clear();
+    _eventNoticeTickets.clear();
+    _dismissEventNotifications();
     _activeAttention.clear();
     unawaited(notifications.cancelAll());
     _resumeLoginPending = false;
@@ -934,6 +1052,16 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         } catch (failure) {
           if (generation != _generation) return;
           error = '自动进入 ${lesson.title} 失败：$failure';
+          final userId = account?.id;
+          if (userId != null) {
+            _reportLessonEvent(
+              lesson,
+              userId,
+              'entryFailed',
+              '自动签到进入失败，请打开课堂处理',
+              current: () => !_disposed && account?.id == userId,
+            );
+          }
           _notify();
         }
       }
@@ -1374,6 +1502,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     final live = LiveClass(lesson: lesson, session: session);
     live.answers.addAll(_persistedAnswers[lesson.id] ?? {});
     classrooms[lesson.id] = live;
+    _reportClassroomEvent(live, 'entered', '已进入课堂，正在确认签到状态');
     if (connectSockets) {
       live.connection = LiveConnection(
         session,
@@ -1403,6 +1532,8 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
           // is waiting for an HTTP response. AI must never outrun a finish event.
           if (event['op'] == 'lessonfinished' ||
               event['op'] == 'hello' && event['message'] == 'lesson finished') {
+            _dismissClassroomProgress(live);
+            _reportClassroomEvent(live, 'lessonEnded', '课堂已结束');
             live.ended = true;
             _cancelAutomaticSubmissions(live);
             for (final timer in live._questionTimingTimers.values) {
@@ -1498,6 +1629,8 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (op == 'lessonfinished' ||
         (op == 'hello' && event['message'] == 'lesson finished')) {
+      _dismissClassroomProgress(live);
+      _reportClassroomEvent(live, 'lessonEnded', '课堂已结束');
       live.ended = true;
       _cancelAutomaticSubmissions(live);
       for (final timer in live._questionTimingTimers.values) {
@@ -1885,6 +2018,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   void _closeProblem(LiveClass live, String id, int sequence) {
     if (id.isEmpty) return;
+    _dismissClassroomProgress(live, problemId: id);
     _cancelAutomaticSubmission(live, id);
     live.closedAtSequence[id] = sequence;
     live.activeProblemIds.remove(id);
@@ -2032,6 +2166,8 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       return live.autoStates[question.id] == 'AI 正在作答' ? 'AI 正在作答' : '尚未开始作答';
     }
     if (!live.activeProblemIds.contains(question.id)) return '正在确认作答时间';
+    final automaticSeconds = automaticSubmissionRemainingSeconds(live, current);
+    if (automaticSeconds != null) return '答案已填充，$automaticSeconds 秒后自动提交';
     final status = live.autoStates[question.id];
     if (status != null &&
         !const {
@@ -2045,6 +2181,25 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       return status;
     }
     return live.draftAnswers.containsKey(question.id) ? '答案已填充，待确认提交' : '可以作答';
+  }
+
+  /// The UI reads the same absolute deadline used by the queued timer. Reading
+  /// it never reschedules a job, extends a delay or performs a network request.
+  DateTime? automaticSubmissionDeadline(LiveClass live, Question question) {
+    final job = live._automaticSubmissions[question.id];
+    if (job == null ||
+        job.deadline == null ||
+        !_automaticSubmissionValid(live, job)) {
+      return null;
+    }
+    return job.deadline;
+  }
+
+  int? automaticSubmissionRemainingSeconds(LiveClass live, Question question) {
+    final deadline = automaticSubmissionDeadline(live, question);
+    if (deadline == null) return null;
+    final milliseconds = deadline.difference(now()).inMilliseconds;
+    return milliseconds <= 0 ? 0 : (milliseconds / 1000).ceil();
   }
 
   void selectSlide(LiveClass live, int index, {bool fromTeacher = false}) {
@@ -2064,13 +2219,16 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> syncAnswers(
     LiveClass live, {
     Set<String> skipPresentations = const {},
+    String reason = 'manualRefresh',
   }) {
     return live.answerSync ??=
-        _syncAnswers(live, skipPresentations: skipPresentations).whenComplete(
-          () {
-            live.answerSync = null;
-          },
-        );
+        _syncAnswers(
+          live,
+          skipPresentations: skipPresentations,
+          reason: reason,
+        ).whenComplete(() {
+          live.answerSync = null;
+        });
   }
 
   Future<void> _syncAfterSuccessfulSubmission(
@@ -2092,6 +2250,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         if (_valid(live) && target != null) {
           await syncAnswers(
             live,
+            reason: 'afterSubmission',
             skipPresentations: live.presentations.keys
                 .where((id) => id != target)
                 .toSet(),
@@ -2120,6 +2279,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _syncAnswers(
     LiveClass live, {
     Set<String> skipPresentations = const {},
+    required String reason,
   }) async {
     if (!_valid(live) || live.syncingAnswers || live.presentations.isEmpty) {
       return;
@@ -2161,6 +2321,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
             error: failure,
             context: {
               'phase': 'livePresentationResults',
+              'source': reason,
               'lessonId': live.lesson.id,
               'presentationId': id,
             },
@@ -2189,6 +2350,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         },
         context: {
           'phase': 'syncedLiveResults',
+          'source': reason,
           'lessonId': live.lesson.id,
           'presentationCount': queried.length,
         },
@@ -2236,6 +2398,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     _notify();
     try {
       await api.submit(live.session, latest, answer);
+      _reportClassroomEvent(live, 'submitted', '答案已提交', question: latest);
       logs.add(
         AppLogEvent.submit,
         success: true,
@@ -2276,6 +2439,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       }
     } catch (failure) {
       // A timed-out POST might have reached the server. Never retry it blindly.
+      _reportClassroomEvent(
+        live,
+        'submitUncertain',
+        '答案提交结果未确认，请打开课堂处理',
+        question: latest,
+      );
       logs.add(
         AppLogEvent.submit,
         success: false,
@@ -2448,6 +2617,9 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   void _driveAutomaticQueue(LiveClass live) {
     live._automaticQueueTimer?.cancel();
     live._automaticQueueTimer = null;
+    for (final queued in live._automaticSubmissions.values) {
+      queued.deadline = null;
+    }
     if (!_valid(live) ||
         !_automaticAllowed ||
         live.ended ||
@@ -2494,6 +2666,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     final remaining = due.difference(now());
+    job.deadline = due;
     final seconds = remaining.isNegative
         ? 0
         : (remaining.inMilliseconds / 1000).ceil();
@@ -2546,6 +2719,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       posting = true;
       live._automaticPostAttemptedRounds.add('$id:${job.question.dt}');
       live.autoStates[id] = '正在自动提交';
+      _reportClassroomEvent(
+        live,
+        'autoSubmitting',
+        '正在自动提交答案',
+        question: job.question,
+      );
       await submitAnswer(live, job.question, job.answer);
       if (_valid(live)) live.autoStates[id] = '答案已提交';
     } catch (failure) {
@@ -2757,6 +2936,13 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     live.autoStates[id] = settings.answerMode == AnswerMode.ai
         ? 'AI 正在作答'
         : '正在自动作答';
+    _reportClassroomEvent(
+      live,
+      'generating',
+      settings.answerMode == AnswerMode.ai ? '正在使用 AI 自动作答' : '正在使用固定答案作答',
+      question: question,
+      token: '$version:$generation',
+    );
     _notify();
     try {
       final snapshot = AppSettings.fromJson(settings.toJson());
@@ -2863,6 +3049,18 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       );
       live.draftAnswers[id] = parsed;
       live._failedAutomaticQuestionIds.remove(id);
+      if (settings.autoSubmit || !canSubmitAnswer(live, latest)) {
+        _reportClassroomEvent(
+          live,
+          'draftFilled',
+          !live.activeProblemIds.contains(id) || !_inWindow(latest)
+              ? '答案已填充，等待开始作答'
+              : settings.autoSubmit
+              ? '答案已填充，等待自动提交'
+              : '答案已填充，请确认提交',
+          question: latest,
+        );
+      }
       logs.add(
         AppLogEvent.draft,
         success: true,
@@ -2890,6 +3088,14 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
           !_questionEnded(live, live.questions[id]!)) {
         live.autoStates[id] = '自动答题未完成：$failure';
         live._failedAutomaticQuestionIds.add(id);
+        if (!canSubmitAnswer(live, live.questions[id]!)) {
+          _reportClassroomEvent(
+            live,
+            'generationFailed',
+            '自动作答失败，请打开课堂查看原因',
+            question: live.questions[id]!,
+          );
+        }
       }
     } finally {
       if (identical(live._automaticAnswerFlights[id], flight)) {
@@ -2983,11 +3189,20 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _applyLocationStatus(LiveClass live, LocationCheckin status) {
+    final previouslySigned = live.location?.signed == true;
     live.location = status;
     if (status.signed) {
       live.attendance = AttendanceStatus.signed;
       live._attendanceFromLocation = true;
       live.attendanceError = null;
+      if (!previouslySigned) {
+        _reportClassroomEvent(
+          live,
+          'locationSigned',
+          '位置签到成功',
+          token: '${live._locationRevision}',
+        );
+      }
     } else if (live._attendanceFromLocation) {
       live.attendance = AttendanceStatus.unknown;
       live._attendanceFromLocation = false;
@@ -2996,6 +3211,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> syncAttendance(LiveClass live) async {
     if (!_valid(live) || live.syncingAttendance) return;
+    final previousAttendance = live.attendance;
     final revision = live._locationRevision;
     live.syncingAttendance = true;
     live.attendanceError = null;
@@ -3022,6 +3238,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       } else {
         live.attendance = status;
         live._attendanceFromLocation = false;
+      }
+      if (previousAttendance != AttendanceStatus.signed &&
+          live.attendance == AttendanceStatus.signed &&
+          !live._attendanceFromLocation) {
+        _reportClassroomEvent(live, 'signed', '课堂签到成功');
       }
     } catch (failure) {
       logs.add(
@@ -3107,6 +3328,12 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         );
         if (current()) {
           live.attendanceError = '位置签到未完成，请刷新状态';
+          _reportClassroomEvent(
+            live,
+            'locationFailed',
+            '自动位置签到失败，请打开课堂处理',
+            token: '$revision',
+          );
           _notify();
         }
       }

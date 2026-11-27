@@ -33,7 +33,7 @@ class AboutPage extends StatelessWidget {
           child: SettingTile(
             icon: Icons.menu_book_rounded,
             title: AppInfo.name,
-            description: '版本 ${AppInfo.version}',
+            description: '版本 ${AppInfo.version}（build ${AppInfo.buildNumber}）',
           ),
         ),
         const Card(

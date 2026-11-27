@@ -17,7 +17,7 @@ class ClassroomNotifications {
     required String lessonId,
     required String problemId,
   }) async {
-    if (key.isEmpty || title.isEmpty || lessonId.isEmpty || problemId.isEmpty) {
+    if (key.isEmpty || title.isEmpty || lessonId.isEmpty) {
       return false;
     }
     try {

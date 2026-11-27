@@ -56,6 +56,23 @@ void main() {
   });
 
   test(
+    'class-level attendance events do not require a problem identity',
+    () async {
+      expect(
+        await notifications.show(
+          key: 'classroom:signed',
+          title: '课堂',
+          body: '签到成功',
+          lessonId: 'lesson',
+          problemId: '',
+        ),
+        true,
+      );
+      expect((calls.single.arguments as Map)['problemId'], '');
+    },
+  );
+
+  test(
     'cancel only carries its reminder key and cancelAll uses this channel',
     () async {
       await notifications.cancel('lesson:problem:manual');

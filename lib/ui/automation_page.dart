@@ -534,7 +534,7 @@ class _AutomationPageState extends State<AutomationPage>
         builder: (dialogContext) => AlertDialog(
           title: const Text('确认自动签到'),
           content: const Text(
-            '开启后自动进入课堂并签到，位置签到使用服务器返回的签到中心坐标，并非手机实测位置。后续每轮自动签到不再逐次确认，手动位置签到仍需确认。',
+            '只会自动进入已加入的课堂，新课需要扫码加入。位置签到使用服务器返回的签到中心坐标，并非手机实测位置。后续每轮自动签到不再逐次确认，手动位置签到仍需确认。',
           ),
           actions: [
             TextButton(
